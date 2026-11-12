@@ -1,6 +1,7 @@
 {
   "name": "inzh-work-calendar",
   "description": "inzh work calendar",
+  "license": "GPL-3.0-or-later",
   "private": true,
   "version": "0.1.0",
   "type": "module",
@@ -16,7 +17,6 @@
     "@tauri-apps/api": "^2",
     "@tauri-apps/plugin-autostart": "^2.7.0",
     "@tauri-apps/plugin-notification": "^2.8.1",
-    "@tauri-apps/plugin-opener": "^2",
     "react": "^19.1.0",
     "react-dom": "^19.1.0"
   },

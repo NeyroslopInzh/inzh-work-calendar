@@ -7,19 +7,21 @@ use crate::store::Store;
 
 pub fn tick(app: &AppHandle) -> Result<(), String> {
     let imported = crate::agent::import_inbox(app)?;
-    let due = app.state::<Store>().collect_due(Utc::now())?;
-    if due.is_empty() {
-        if imported {
-            let _ = app.emit("cards-changed", app.state::<Store>().list());
+    let now = Utc::now();
+    let due = app.state::<Store>().due(now);
+    let mut sent = false;
+    for (card, kind) in due {
+        match show_nag(app, &card, kind) {
+            Ok(()) => {
+                app.state::<Store>().acknowledge(&card.id, kind, now)?;
+                sent = true;
+            }
+            Err(err) => eprintln!("уведомление «{}»: {err}", card.title),
         }
-        return Ok(());
     }
-    for (card, kind) in &due {
-        if let Err(err) = show_nag(app, card, *kind) {
-            eprintln!("уведомление «{}»: {err}", card.title);
-        }
+    if imported || sent {
+        let _ = app.emit("cards-changed", app.state::<Store>().list());
     }
-    let _ = app.emit("cards-changed", app.state::<Store>().list());
     Ok(())
 }
 

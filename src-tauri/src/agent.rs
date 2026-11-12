@@ -1,5 +1,5 @@
 use std::fs::{self, OpenOptions};
-use std::io::Write;
+use std::io::{Read, Write};
 use std::path::Path;
 use std::sync::Mutex;
 
@@ -95,12 +95,17 @@ fn dispatch(app: &AppHandle, token: &str, mut request: Request) -> Result<(), St
     let mut body = String::new();
     request
         .as_reader()
+        .take(64 * 1024)
         .read_to_string(&mut body)
         .map_err(|err| err.to_string())?;
+    if body.len() >= 64 * 1024 {
+        return respond(request, 413, json!({ "error": "слишком большое тело запроса" }));
+    }
 
     let result = route(app, &method, &path, &body);
     let (status, payload) = match result {
         Ok(value) => (200, value),
+        Err(err) if err == "Задача не найдена" => (404, json!({ "error": err })),
         Err(err) => (400, json!({ "error": err })),
     };
     respond(request, status, payload)

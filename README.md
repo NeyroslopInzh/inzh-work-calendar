@@ -1,25 +1,50 @@
 # inzh work calendar
 
-Календарь и канбан для Windows. У задачи есть необязательное начало и дедлайн. Пока она не в колонке «Готово», Windows напоминает каждые 10 минут. Дедлайн можно отложить не больше чем на сутки.
+Календарь и канбан для Windows и Linux. У задачи есть необязательное начало и дедлайн. Пока она не в колонке «Готово», система напоминает каждые 10 минут. Дедлайн можно отложить не больше чем на сутки.
 
-Окно закрывается в трей. Выход — из меню трея. При первом запуске включается автозапуск вместе с Windows.
+Copyright (C) 2026 NeyroslopInzh
 
-## Запуск
+Это свободная программа под GNU GPL версии 3 или новее. Если вы её меняете и отдаёте кому-то копию, исходники этих изменений нужно отдать на тех же условиях. Текст лицензии — в файле `LICENSE`.
+
+## Сборка
+
+Нужны Node.js, Rust и системные библиотеки Tauri.
+
+Linux (Debian/Ubuntu):
+
+```sh
+sudo apt-get update
+sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf
+npm install
+npm run tauri build
+```
+
+Windows:
 
 ```powershell
 npm install
-npm run tauri dev
+npm run tauri build
 ```
 
-Задачи хранятся в `%APPDATA%\com.inzh.workcalendar\cards.json`.
+Окно закрывается в трей. Выход — из меню трея. При первом запуске включается автозапуск.
 
-## Задачи из чата
+## Данные
 
-Пока приложение запущено, оно слушает только `127.0.0.1`. Адрес и токен записаны в `%APPDATA%\com.inzh.workcalendar\endpoint.json`.
+Задачи лежат рядом с `endpoint.json`:
 
-```powershell
-.\scripts\add-task.ps1 -Title "помыться" -Start "2026-11-13T21:00"
-.\scripts\add-task.ps1 -Title "сдать отчёт" -Deadline "2026-11-14T18:00"
+- Linux: `~/.local/share/com.inzh.workcalendar/`
+- Windows: `%APPDATA%\com.inzh.workcalendar\`
+
+Пока приложение запущено, оно принимает задачи только с `127.0.0.1`. Порт и токен — в `endpoint.json`.
+
+Создать задачу: `POST {base}/tasks` с заголовком `Authorization: Bearer {token}`.
+
+```json
+{ "title": "помыться", "startAt": "2026-11-13T21:00", "deadlineAt": "2026-11-14T09:00", "status": "todo" }
 ```
 
-Если приложение выключено, скрипт дописывает строку в `inbox.jsonl`. Календарь заберёт её при следующем запуске.
+`startAt` и `deadlineAt` необязательны. Время — местное `YYYY-MM-DDTHH:MM` или RFC3339. `status`: `todo`, `doing`, `done`.
+
+Список: `GET {base}/tasks`. Изменить: `PATCH {base}/tasks/{id}` (`null` снимает дату). Удалить: `DELETE {base}/tasks/{id}`.
+
+Если приложение выключено, допишите одну JSON-строку в `inbox.jsonl` в той же папке. Календарь заберёт её при запуске.

@@ -28,8 +28,8 @@ impl Store {
         let settings_existed = settings_path.exists();
         Ok(Self {
             dir,
-            cards: Mutex::new(read_json(&cards_path).unwrap_or_default()),
-            settings: Mutex::new(read_json(&settings_path).unwrap_or_default()),
+            cards: Mutex::new(read_json(&cards_path)?),
+            settings: Mutex::new(read_json(&settings_path)?),
             cards_path,
             settings_path,
             settings_existed,
@@ -74,64 +74,64 @@ impl Store {
             }
         }
 
-        let mut cards = lock(&self.cards);
-        if let Some(id) = input.id.as_ref() {
-            let Some(card) = cards.iter_mut().find(|card| card.id == *id) else {
-                return Err("Задача не найдена".into());
-            };
-            if card.start_at != input.start_at {
-                card.last_start_notified_at = None;
+        self.update_cards(|cards| {
+            if let Some(id) = input.id.as_ref() {
+                let Some(card) = cards.iter_mut().find(|card| card.id == *id) else {
+                    return Err("Задача не найдена".into());
+                };
+                if card.start_at != input.start_at {
+                    card.last_start_notified_at = None;
+                }
+                if card.deadline_at != input.deadline_at {
+                    card.last_deadline_notified_at = None;
+                    card.snooze_until = None;
+                }
+                card.title = title.to_string();
+                card.status = input.status;
+                card.start_at = input.start_at;
+                card.deadline_at = input.deadline_at;
+                apply_completion(card, now);
+            } else {
+                let mut card = Card {
+                    id: Uuid::new_v4().to_string(),
+                    title: title.to_string(),
+                    status: input.status,
+                    start_at: input.start_at,
+                    deadline_at: input.deadline_at,
+                    snooze_until: None,
+                    last_start_notified_at: None,
+                    last_deadline_notified_at: None,
+                    created_at: now,
+                    completed_at: None,
+                };
+                apply_completion(&mut card, now);
+                cards.push(card);
             }
-            if card.deadline_at != input.deadline_at {
-                card.last_deadline_notified_at = None;
-                card.snooze_until = None;
-            }
-            card.title = title.to_string();
-            card.status = input.status;
-            card.start_at = input.start_at;
-            card.deadline_at = input.deadline_at;
-            apply_completion(card, now);
-        } else {
-            let mut card = Card {
-                id: Uuid::new_v4().to_string(),
-                title: title.to_string(),
-                status: input.status,
-                start_at: input.start_at,
-                deadline_at: input.deadline_at,
-                snooze_until: None,
-                last_start_notified_at: None,
-                last_deadline_notified_at: None,
-                created_at: now,
-                completed_at: None,
-            };
-            apply_completion(&mut card, now);
-            cards.push(card);
-        }
-        write_json(&self.cards_path, &*cards)?;
-        Ok(cards.clone())
+            Ok(())
+        })
     }
 
     pub fn set_status(&self, id: &str, status: Status) -> Result<Vec<Card>, String> {
         let now = Utc::now();
-        let mut cards = lock(&self.cards);
-        let Some(card) = cards.iter_mut().find(|card| card.id == id) else {
-            return Err("Задача не найдена".into());
-        };
-        card.status = status;
-        apply_completion(card, now);
-        write_json(&self.cards_path, &*cards)?;
-        Ok(cards.clone())
+        self.update_cards(|cards| {
+            let Some(card) = cards.iter_mut().find(|card| card.id == id) else {
+                return Err("Задача не найдена".into());
+            };
+            card.status = status;
+            apply_completion(card, now);
+            Ok(())
+        })
     }
 
     pub fn delete(&self, id: &str) -> Result<Vec<Card>, String> {
-        let mut cards = lock(&self.cards);
-        let before = cards.len();
-        cards.retain(|card| card.id != id);
-        if cards.len() == before {
-            return Err("Задача не найдена".into());
-        }
-        write_json(&self.cards_path, &*cards)?;
-        Ok(cards.clone())
+        self.update_cards(|cards| {
+            let before = cards.len();
+            cards.retain(|card| card.id != id);
+            if cards.len() == before {
+                return Err("Задача не найдена".into());
+            }
+            Ok(())
+        })
     }
 
     pub fn snooze(&self, id: &str, minutes: u32) -> Result<Vec<Card>, String> {
@@ -139,39 +139,51 @@ impl Store {
             return Err("Отложить можно от 1 минуты до 24 часов".into());
         }
         let now = Utc::now();
-        let mut cards = lock(&self.cards);
-        let Some(card) = cards.iter_mut().find(|card| card.id == id) else {
-            return Err("Задача не найдена".into());
-        };
-        if card.status == Status::Done {
-            return Err("Завершённую задачу не нужно откладывать".into());
-        }
-        let Some(deadline) = card.deadline_at else {
-            return Err("Отложить можно только задачу с дедлайном".into());
-        };
-        if now < deadline {
-            return Err("Отложить можно, когда дедлайн уже наступил".into());
-        }
-        card.snooze_until = Some(now + Duration::minutes(i64::from(minutes)));
-        card.last_deadline_notified_at = None;
-        card.last_start_notified_at = None;
-        write_json(&self.cards_path, &*cards)?;
-        Ok(cards.clone())
+        self.update_cards(|cards| {
+            let Some(card) = cards.iter_mut().find(|card| card.id == id) else {
+                return Err("Задача не найдена".into());
+            };
+            if card.status == Status::Done {
+                return Err("Завершённую задачу не нужно откладывать".into());
+            }
+            let Some(deadline) = card.deadline_at else {
+                return Err("Отложить можно только задачу с дедлайном".into());
+            };
+            if now < deadline {
+                return Err("Отложить можно, когда дедлайн уже наступил".into());
+            }
+            card.snooze_until = Some(now + Duration::minutes(i64::from(minutes)));
+            card.last_deadline_notified_at = None;
+            card.last_start_notified_at = None;
+            Ok(())
+        })
     }
 
-    pub fn collect_due(&self, now: DateTime<Utc>) -> Result<Vec<(Card, NagKind)>, String> {
-        let mut cards = lock(&self.cards);
-        let mut due = Vec::new();
-        for card in cards.iter_mut() {
-            if let Some(kind) = nag_kind(card, now) {
-                mark_notified(card, kind, now);
-                due.push((card.clone(), kind));
-            }
-        }
-        if !due.is_empty() {
-            write_json(&self.cards_path, &*cards)?;
-        }
-        Ok(due)
+    pub fn due(&self, now: DateTime<Utc>) -> Vec<(Card, NagKind)> {
+        lock(&self.cards)
+            .iter()
+            .filter_map(|card| nag_kind(card, now).map(|kind| (card.clone(), kind)))
+            .collect()
+    }
+
+    pub fn acknowledge(&self, id: &str, kind: NagKind, now: DateTime<Utc>) -> Result<(), String> {
+        self.update_cards(|cards| {
+            let Some(card) = cards.iter_mut().find(|card| card.id == id) else {
+                return Ok(());
+            };
+            mark_notified(card, kind, now);
+            Ok(())
+        })?;
+        Ok(())
+    }
+
+    fn update_cards(&self, change: impl FnOnce(&mut Vec<Card>) -> Result<(), String>) -> Result<Vec<Card>, String> {
+        let mut guard = lock(&self.cards);
+        let mut next = guard.clone();
+        change(&mut next)?;
+        write_json(&self.cards_path, &next)?;
+        *guard = next.clone();
+        Ok(next)
     }
 }
 
@@ -190,15 +202,24 @@ fn lock<T>(mutex: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
     mutex.lock().unwrap_or_else(|err| err.into_inner())
 }
 
-fn read_json<T: serde::de::DeserializeOwned + Default>(path: &Path) -> Option<T> {
-    let bytes = fs::read(path).ok()?;
+fn read_json<T: serde::de::DeserializeOwned + Default>(path: &Path) -> Result<T, String> {
+    if !path.exists() {
+        return Ok(T::default());
+    }
+    let bytes = fs::read(path).map_err(|err| err.to_string())?;
     match serde_json::from_slice(&bytes) {
-        Ok(value) => Some(value),
+        Ok(value) => Ok(value),
         Err(err) => {
             let backup = path.with_extension("json.bak");
-            let _ = fs::copy(path, backup);
-            eprintln!("не читается {}: {err}", path.display());
-            None
+            fs::rename(path, &backup).map_err(|rename| {
+                format!("{err}; файл {} оставлен на месте: {rename}", path.display())
+            })?;
+            eprintln!(
+                "{} повреждён и переложен в {}",
+                path.display(),
+                backup.display()
+            );
+            Ok(T::default())
         }
     }
 }

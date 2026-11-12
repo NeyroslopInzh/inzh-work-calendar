@@ -107,10 +107,14 @@ export default function App() {
     const timer = window.setInterval(() => setNow(new Date()), 30000);
     void (async () => {
       try {
-        const [loaded, settings] = await Promise.all([listCards(), getSettings()]);
-        if (!alive) return;
-        setCards(loaded);
-        setAutostartOn(settings.autostart);
+        const loaded = await listCards();
+        if (alive) setCards(loaded);
+      } catch (loadError) {
+        if (alive) setError(explain(loadError));
+      }
+      try {
+        const settings = await getSettings();
+        if (alive) setAutostartOn(settings.autostart);
       } catch (loadError) {
         if (alive) setError(explain(loadError));
       }
@@ -250,7 +254,7 @@ export default function App() {
                 });
             }}
           />
-          С Windows
+          Автозапуск
         </label>
         <button type="button" className="solid" onClick={() => setDraft(blankDraft(selected))}>
           Новая задача
