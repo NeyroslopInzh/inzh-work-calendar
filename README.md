@@ -671,6 +671,7 @@ Batafsil: [docs/INSTRUCTIONS.uz.md](docs/INSTRUCTIONS.uz.md).
 - Просроченный дедлайн заменяет напоминание о начале и стучит каждые 10 минут, пока задача не в «Готово»
 - Напоминание можно отложить не больше чем на сутки
 - Тёмная и светлая тема, трей, автозапуск
+- Windows и AppImage обновляются из настроек. Пакет deb открывает страницу релиза
 - Локальный вход задач на `127.0.0.1`, пока приложение запущено
 
 </details>
@@ -688,6 +689,7 @@ Batafsil: [docs/INSTRUCTIONS.uz.md](docs/INSTRUCTIONS.uz.md).
 - A passed deadline replaces the start reminder and nags every 10 minutes until the task is in “Готово”
 - A reminder can be snoozed for at most one day
 - Dark and light theme, tray, autostart
+- Windows and AppImage update from Settings. The deb package opens the release page
 - Local task intake on `127.0.0.1` while the app is running
 
 </details>
@@ -707,6 +709,7 @@ Batafsil: [docs/INSTRUCTIONS.uz.md](docs/INSTRUCTIONS.uz.md).
 - דדליין שעבר מחליף את תזכורת ההתחלה ומתריע כל 10 דקות עד שהמשימה ב-«Готово»
 - אפשר לדחות תזכורת לכל היותר ליממה
 - ערכת כהה ובהירה, מגש, הפעלה אוטומטית
+- Windows ו-AppImage מתעדכנים מההגדרות. חבילת deb פותחת את דף הריליז
 - קליטת משימות מקומית ב-`127.0.0.1` כל עוד האפליקציה רצה
 
 </div>
@@ -726,6 +729,7 @@ Batafsil: [docs/INSTRUCTIONS.uz.md](docs/INSTRUCTIONS.uz.md).
 - बीती डेडलाइन शुरुआत की याद की जगह लेती है और «Готово» तक हर 10 मिनट याद दिलाती है
 - याद को ज़्यादा से ज़्यादा एक दिन के लिए टाला जा सकता है
 - डार्क और लाइट थीम, ट्रे, ऑटोस्टार्ट
+- Windows और AppImage सेटिंग्स से अपडेट होते हैं। deb पैकेज रिलीज़ पेज खोलता है
 - ऐप चलते समय `127.0.0.1` पर लोकल टास्क इनटेक
 
 </details>
@@ -743,6 +747,7 @@ Batafsil: [docs/INSTRUCTIONS.uz.md](docs/INSTRUCTIONS.uz.md).
 - O‘tgan dedlayn boshlanish eslatmasining o‘rnini egallaydi va vazifa «Готово» ga tushmaguncha har 10 daqiqada eslatadi
 - Eslatmani ko‘pi bilan bir sutkaga surish mumkin
 - Qorong‘i va yorug‘ mavzu, trey, avtostart
+- Windows va AppImage sozlamalardan yangilanadi. deb paketi reliz sahifasini ochadi
 - Ilova ishlayotganda `127.0.0.1` da mahalliy vazifa qabul qilish
 
 </details>

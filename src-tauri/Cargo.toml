@@ -1,6 +1,6 @@
 [package]
 name = "inzh-work-calendar"
-version = "0.2.1"
+version = "0.2.2"
 description = "inzh work calendar"
 license = "GPL-3.0-or-later"
 edition = "2024"
@@ -27,6 +27,9 @@ tauri-plugin-single-instance = "2.5.5"
 chrono = { version = "0.4.45", features = ["serde"] }
 uuid = { version = "1.29.2", features = ["v4"] }
 tiny_http = "0.12.0"
+tauri-plugin-updater = "2"
+tauri-plugin-process = "2"
+tauri-plugin-opener = "2"
 
 [target.'cfg(windows)'.dependencies]
 tauri-winrt-notification = "0.8.1"

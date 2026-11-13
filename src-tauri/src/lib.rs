@@ -110,6 +110,19 @@ fn set_theme(store: tauri::State<Store>, theme: String) -> Result<Settings, Stri
     store.set_theme(&theme)
 }
 
+/// Windows and AppImage can install the next release in place.
+/// A deb package is owned by the system package manager, so the app only opens the release page.
+#[tauri::command]
+fn update_kind() -> &'static str {
+    if cfg!(target_os = "windows") {
+        "windows"
+    } else if std::env::var_os("APPIMAGE").is_some() {
+        "appimage"
+    } else {
+        "browser"
+    }
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     #[cfg(windows)]
@@ -123,6 +136,9 @@ pub fn run() {
             tauri_plugin_autostart::MacosLauncher::LaunchAgent,
             None,
         ))
+        .plugin(tauri_plugin_process::init())
+        .plugin(tauri_plugin_opener::init())
+        .plugin(tauri_plugin_updater::Builder::new().build())
         .on_window_event(|window, event| {
             if let WindowEvent::CloseRequested { api, .. } = event {
                 if ALLOW_EXIT.load(Ordering::Relaxed) {
@@ -180,7 +196,8 @@ pub fn run() {
             hide_nag,
             get_settings,
             set_autostart,
-            set_theme
+            set_theme,
+            update_kind
         ])
         .run(tauri::generate_context!())
         .expect("inzh work calendar не запустился");

@@ -12,6 +12,9 @@ dist
 dist-ssr
 *.local
 
+# updater signing key stays outside the repo
+*.key
+
 # Editor directories and files
 .cursor/os-lab
 .vscode

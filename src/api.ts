@@ -48,3 +48,9 @@ export function setAutostart(enabled: boolean): Promise<Settings> {
 export function setTheme(theme: "dark" | "light"): Promise<Settings> {
   return invoke("set_theme", { theme });
 }
+
+export type UpdateKind = "windows" | "appimage" | "browser";
+
+export function updateKind(): Promise<UpdateKind> {
+  return invoke("update_kind");
+}

@@ -1,7 +1,7 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
   "productName": "inzh work calendar",
-  "version": "0.2.1",
+  "version": "0.2.2",
   "identifier": "com.inzh.workcalendar",
   "build": {
     "beforeDevCommand": "npm run dev",
@@ -34,6 +34,18 @@
       "icons/128x128@2x.png",
       "icons/icon.png",
       "icons/icon.ico"
-    ]
+    ],
+    "createUpdaterArtifacts": true
+  },
+  "plugins": {
+    "updater": {
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDcxMkMyQUNGODdCMkE2NTMKUldSVHByS0h6eW9zY1dWd2ozLzNXVWRsdG8rQzBwMG9pOHBRS2x0VENCcEZ2OEtFMFBCQ3cySmQK",
+      "endpoints": [
+        "https://github.com/NeyroslopInzh/inzh-work-calendar/releases/latest/download/latest.json"
+      ],
+      "windows": {
+        "installMode": "passive"
+      }
+    }
   }
 }

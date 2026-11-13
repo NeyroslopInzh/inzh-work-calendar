@@ -16,6 +16,7 @@ import {
   snoozeCard,
 } from "./api";
 import { DateField } from "./DateField";
+import { applyUpdate, findUpdate, type UpdateOffer } from "./updates";
 import {
   agendaStamp,
   dayKey,
@@ -150,6 +151,8 @@ function MainApp() {
   const [newStatus, setNewStatus] = useState("");
   const [theme, setThemeName] = useState<"dark" | "light">("dark");
   const [customSnooze, setCustomSnooze] = useState("30");
+  const [offer, setOffer] = useState<UpdateOffer | null>(null);
+  const [updating, setUpdating] = useState(false);
 
   useEffect(() => {
     let unlistenCards: (() => void) | undefined;
@@ -193,6 +196,36 @@ function MainApp() {
   useEffect(() => {
     document.documentElement.dataset.theme = theme;
   }, [theme]);
+
+  useEffect(() => {
+    let alive = true;
+    async function look() {
+      try {
+        const next = await findUpdate();
+        if (alive) setOffer(next);
+      } catch {
+        /* нет сети или релиз ещё без подписи */
+      }
+    }
+    void look();
+    const timer = window.setInterval(() => void look(), 6 * 60 * 60 * 1000);
+    return () => {
+      alive = false;
+      window.clearInterval(timer);
+    };
+  }, []);
+
+  async function onUpdate() {
+    if (!offer || updating) return;
+    setUpdating(true);
+    try {
+      await applyUpdate(offer.kind);
+      if (offer.kind === "browser") setUpdating(false);
+    } catch (updateError) {
+      setUpdating(false);
+      setError(explain(updateError));
+    }
+  }
 
   useEffect(() => {
     function onKey(event: KeyboardEvent) {
@@ -564,6 +597,9 @@ function MainApp() {
         ) : (
           <SettingsView
             autostart={autostart}
+            offer={offer}
+            updating={updating}
+            onUpdate={() => void onUpdate()}
             columns={columns}
             newStatus={newStatus}
             onNewStatus={setNewStatus}
@@ -812,6 +848,9 @@ function MainApp() {
 
 function SettingsView({
   autostart,
+  offer,
+  updating,
+  onUpdate,
   columns,
   newStatus,
   onNewStatus,
@@ -820,6 +859,9 @@ function SettingsView({
   onRemove,
 }: {
   autostart: boolean;
+  offer: UpdateOffer | null;
+  updating: boolean;
+  onUpdate: () => void;
   columns: Column[];
   newStatus: string;
   onNewStatus: (value: string) => void;
@@ -830,6 +872,25 @@ function SettingsView({
   return (
     <section className="settings">
       <h2>Настройки</h2>
+      {offer && (
+        <article className="setting">
+          <div>
+            <strong>Доступна версия {offer.version}</strong>
+            <p>
+              {offer.kind === "browser"
+                ? "Пакет deb ставит система. Новая версия на странице релиза."
+                : "Скачать и перезапустить календарь"}
+            </p>
+          </div>
+          <button type="button" className="solid" disabled={updating} onClick={onUpdate}>
+            {updating
+              ? "Скачиваем…"
+              : offer.kind === "browser"
+                ? "Открыть страницу релиза"
+                : "Обновить и перезапустить"}
+          </button>
+        </article>
+      )}
       <article className="setting">
         <div>
           <strong>Автозапуск</strong>

@@ -39,6 +39,8 @@ jobs:
       - uses: tauri-apps/tauri-action@v1
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
         with:
           tagName: v__VERSION__
           releaseName: "inzh work calendar v__VERSION__"
@@ -46,9 +48,10 @@ jobs:
             Календарь и канбан на одних карточках для Windows и Linux.
             Напоминание приходит тостом и окном поверх других окон: его можно сдвинуть, закрыть или отложить. Полоска просрочки под календарём и доской снимается вместе с откладыванием.
             Программа распространяется под GNU GPL версии 3 или новее: изменённые копии нужно открывать на тех же условиях.
+            Windows и AppImage обновляются из настроек. Пакет deb открывает страницу релиза.
           releaseDraft: false
           prerelease: false
-          uploadUpdaterJson: false
-          uploadUpdaterSignatures: false
+          uploadUpdaterJson: true
+          uploadUpdaterSignatures: true
           retryAttempts: 3
           args: ${{ matrix.args }}

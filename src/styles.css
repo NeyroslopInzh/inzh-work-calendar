@@ -501,6 +501,7 @@ button:focus-visible, input:focus-visible, select:focus-visible {
   padding: 16px;
 }
 .setting p { margin: 4px 0 0; color: var(--muted); }
+.setting button.solid { white-space: nowrap; }
 .column-setting { align-items: stretch; flex-direction: column; }
 .status-row {
   display: flex;
