@@ -99,8 +99,18 @@ export function isDeadlineDue(card: Card, now: Date): boolean {
   );
 }
 
+export function showsOn(card: Card, day: Date): boolean {
+  if (placement(card, day)) return true;
+  const rule = card.recurrence;
+  if (!rule) return false;
+  const key = dayKey(day);
+  if (key < rule.from || key > rule.until) return false;
+  const weekday = day.getDay() === 0 ? 7 : day.getDay();
+  return rule.weekdays.includes(weekday);
+}
+
 export function isStartDue(card: Card, now: Date): boolean {
-  if (card.status === "done" || !card.startAt) return false;
+  if (card.status !== "todo" || !card.startAt) return false;
   if (new Date(card.startAt).getTime() > now.getTime()) return false;
   if (card.deadlineAt && new Date(card.deadlineAt).getTime() <= now.getTime()) return false;
   return true;

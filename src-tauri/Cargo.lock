@@ -1788,7 +1788,7 @@ dependencies = [
 
 [[package]]
 name = "inzh-work-calendar"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "chrono",
  "serde",
@@ -1798,8 +1798,11 @@ dependencies = [
  "tauri-plugin-autostart",
  "tauri-plugin-notification",
  "tauri-plugin-single-instance",
+ "tauri-winrt-notification",
  "tiny_http",
  "uuid",
+ "windows",
+ "windows-registry",
 ]
 
 [[package]]

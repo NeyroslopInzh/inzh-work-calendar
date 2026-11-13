@@ -1,14 +1,21 @@
 import { useEffect, useMemo, useState, type FormEvent } from "react";
 import { listen } from "@tauri-apps/api/event";
+import { getCurrentWindow } from "@tauri-apps/api/window";
 import {
+  addColumn,
   deleteCard,
   getSettings,
+  hideNag,
   listCards,
+  listColumns,
+  removeColumn,
   saveCard,
   setAutostart,
   setStatus,
+  setTheme,
   snoozeCard,
 } from "./api";
+import { DateField } from "./DateField";
 import {
   agendaStamp,
   dayKey,
@@ -24,17 +31,29 @@ import {
   monthLabel,
   placement,
   shiftToDay,
+  showsOn,
   toLocalInput,
 } from "./time";
-import { COLUMNS, type Card, type CardInput, type Placement, type Status } from "./types";
+import { DONE, TODO, WEEKDAYS, type Card, type CardInput, type Column, type Placement } from "./types";
 
 type Draft = {
   id: string | null;
   title: string;
-  status: Status;
+  description: string;
+  status: string;
   startAt: string;
   deadlineAt: string;
+  repeat: boolean;
+  repeatFrom: string;
+  repeatUntil: string;
+  weekdays: number[];
 };
+
+const FALLBACK_COLUMNS: Column[] = [
+  { id: TODO, title: "К выполнению" },
+  { id: "doing", title: "В работе" },
+  { id: DONE, title: "Готово" },
+];
 
 type DragPayload = { id: string; kind: Placement };
 
@@ -53,26 +72,35 @@ function explain(error: unknown): string {
 }
 
 function draftFromCard(card: Card): Draft {
+  const today = dayKey(new Date());
   return {
     id: card.id,
     title: card.title,
+    description: card.description,
     status: card.status,
     startAt: toLocalInput(card.startAt),
     deadlineAt: toLocalInput(card.deadlineAt),
+    repeat: Boolean(card.recurrence),
+    repeatFrom: card.recurrence?.from ?? today,
+    repeatUntil: card.recurrence?.until ?? today,
+    weekdays: card.recurrence?.weekdays ?? [],
   };
 }
 
-function blankDraft(day: Date): Draft {
-  const start = new Date(day);
+function blankDraft(): Draft {
   const now = new Date();
-  if (dayKey(day) === dayKey(now)) start.setHours(now.getHours() + 1, 0, 0, 0);
-  else start.setHours(9, 0, 0, 0);
+  const weekday = now.getDay() === 0 ? 7 : now.getDay();
   return {
     id: null,
     title: "",
-    status: "todo",
-    startAt: toLocalInput(start.toISOString()),
-    deadlineAt: "",
+    description: "",
+    status: TODO,
+    startAt: "",
+    deadlineAt: toLocalInput(now.toISOString()),
+    repeat: false,
+    repeatFrom: dayKey(now),
+    repeatUntil: dayKey(now),
+    weekdays: [weekday],
   };
 }
 
@@ -80,15 +108,32 @@ function inputFromDraft(draft: Draft): CardInput {
   return {
     id: draft.id,
     title: draft.title,
+    description: draft.description,
     status: draft.status,
     startAt: fromLocalInput(draft.startAt),
     deadlineAt: fromLocalInput(draft.deadlineAt),
+    recurrence: draft.repeat
+      ? { from: draft.repeatFrom, until: draft.repeatUntil, weekdays: draft.weekdays }
+      : null,
   };
 }
 
+function windowLabel(): string {
+  try {
+    return getCurrentWindow().label;
+  } catch {
+    return "main";
+  }
+}
+
 export default function App() {
+  if (windowLabel() === "nag") return <NagPopup />;
+  return <MainApp />;
+}
+
+function MainApp() {
   const [cards, setCards] = useState<Card[]>([]);
-  const [view, setView] = useState<"calendar" | "board">("calendar");
+  const [view, setView] = useState<"calendar" | "board" | "settings">("calendar");
   const [month, setMonth] = useState(() => new Date());
   const [selected, setSelected] = useState(() => new Date());
   const [now, setNow] = useState(() => new Date());
@@ -97,7 +142,13 @@ export default function App() {
   const [autostart, setAutostartOn] = useState(true);
   const [focusId, setFocusId] = useState<string | null>(null);
   const [dropDay, setDropDay] = useState<string | null>(null);
-  const [dropColumn, setDropColumn] = useState<Status | null>(null);
+  const [dropColumn, setDropColumn] = useState<string | null>(null);
+  const [draggingId, setDraggingId] = useState<string | null>(null);
+  const [dragPoint, setDragPoint] = useState<{ x: number; y: number } | null>(null);
+  const [viewId, setViewId] = useState<string | null>(null);
+  const [columns, setColumns] = useState<Column[]>(FALLBACK_COLUMNS);
+  const [newStatus, setNewStatus] = useState("");
+  const [theme, setThemeName] = useState<"dark" | "light">("dark");
   const [customSnooze, setCustomSnooze] = useState("30");
 
   useEffect(() => {
@@ -113,8 +164,11 @@ export default function App() {
         if (alive) setError(explain(loadError));
       }
       try {
-        const settings = await getSettings();
-        if (alive) setAutostartOn(settings.autostart);
+        const [settings, loadedColumns] = await Promise.all([getSettings(), listColumns()]);
+        if (!alive) return;
+        setAutostartOn(settings.autostart);
+        setThemeName(settings.theme === "light" ? "light" : "dark");
+        if (loadedColumns.length > 0) setColumns(loadedColumns);
       } catch (loadError) {
         if (alive) setError(explain(loadError));
       }
@@ -137,10 +191,24 @@ export default function App() {
   }, []);
 
   useEffect(() => {
+    document.documentElement.dataset.theme = theme;
+  }, [theme]);
+
+  useEffect(() => {
+    function onKey(event: KeyboardEvent) {
+      if (event.key !== "Escape") return;
+      if (draft) setDraft(null);
+      else if (viewId) setViewId(null);
+    }
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [draft, viewId]);
+
+  useEffect(() => {
     if (!focusId) return;
     const card = cards.find((item) => item.id === focusId);
     if (!card) return;
-    setDraft(draftFromCard(card));
+    setViewId(card.id);
     setFocusId(null);
   }, [cards, focusId]);
 
@@ -151,7 +219,7 @@ export default function App() {
   const days = monthGrid(month);
   const selectedKey = dayKey(selected);
   const agenda = cards
-    .filter((card) => placement(card, selected))
+    .filter((card) => showsOn(card, selected))
     .sort((a, b) => {
       const aTime = agendaStamp(a, selected);
       const bTime = agendaStamp(b, selected);
@@ -186,8 +254,53 @@ export default function App() {
   }
 
   function startDrag(event: React.DragEvent, card: Card, kind: Placement) {
+    setDraggingId(card.id);
     event.dataTransfer.setData("text/plain", JSON.stringify({ id: card.id, kind }));
     event.dataTransfer.effectAllowed = "move";
+  }
+
+  function columnTitle(id: string): string {
+    return columns.find((column) => column.id === id)?.title ?? id;
+  }
+
+  function openView(cardId: string) {
+    setViewId(cardId);
+  }
+
+  function beginBoardDrag(event: React.PointerEvent, cardId: string) {
+    if (event.button !== 0) return;
+    const target = event.target as HTMLElement;
+    if (target.closest("button, a, input, textarea, select")) return;
+    event.preventDefault();
+    const startX = event.clientX;
+    const startY = event.clientY;
+    let moved = false;
+    function move(pointer: PointerEvent) {
+      if (!moved && Math.hypot(pointer.clientX - startX, pointer.clientY - startY) < 6) return;
+      moved = true;
+      const column = document.elementFromPoint(pointer.clientX, pointer.clientY)?.closest("[data-column]");
+      setDraggingId(cardId);
+      setDragPoint({ x: pointer.clientX, y: pointer.clientY });
+      setDropColumn(column?.getAttribute("data-column") ?? null);
+    }
+    function up(pointer: PointerEvent) {
+      window.removeEventListener("pointermove", move);
+      window.removeEventListener("pointerup", up);
+      const column = document.elementFromPoint(pointer.clientX, pointer.clientY)?.closest("[data-column]");
+      const status = column?.getAttribute("data-column");
+      setDraggingId(null);
+      setDragPoint(null);
+      setDropColumn(null);
+      if (moved && status) void run(() => setStatus(cardId, status));
+      else if (!moved) openView(cardId);
+    }
+    window.addEventListener("pointermove", move);
+    window.addEventListener("pointerup", up);
+  }
+
+  function chooseTheme(next: "dark" | "light") {
+    setThemeName(next);
+    void setTheme(next).catch((themeError) => setError(explain(themeError)));
   }
 
   async function dropOnDay(event: React.DragEvent, day: Date) {
@@ -199,7 +312,9 @@ export default function App() {
     const next: CardInput = {
       id: card.id,
       title: card.title,
+      description: card.description,
       status: card.status,
+      recurrence: card.recurrence,
       startAt:
         payload.kind === "deadline"
           ? card.startAt
@@ -227,98 +342,64 @@ export default function App() {
     <div className="app">
       <header className="top">
         <div className="brand">
-          <b>inzh</b>
+          <b>inzh's</b>
           <span>work calendar</span>
         </div>
-        <div className="switch">
+        <div className="switch" data-view={view}>
+          <span className="thumb" />
           <button type="button" aria-pressed={view === "calendar"} onClick={() => setView("calendar")}>
             Календарь
           </button>
           <button type="button" aria-pressed={view === "board"} onClick={() => setView("board")}>
             Доска
           </button>
+          <button type="button" aria-pressed={view === "settings"} onClick={() => setView("settings")}>
+            Настройки
+          </button>
         </div>
-        <div className="grow" />
-        <label className="check">
-          <input
-            type="checkbox"
-            checked={autostart}
-            onChange={(event) => {
-              const enabled = event.target.checked;
-              setAutostartOn(enabled);
-              void setAutostart(enabled)
-                .then((settings) => setAutostartOn(settings.autostart))
-                .catch((autostartError) => {
-                  setAutostartOn(!enabled);
-                  setError(explain(autostartError));
-                });
-            }}
-          />
-          Автозапуск
-        </label>
-        <button type="button" className="solid" onClick={() => setDraft(blankDraft(selected))}>
-          Новая задача
-        </button>
+        <div className="top-actions">
+          <div className="switch theme" data-theme={theme}>
+            <span className="thumb" />
+            <button type="button" aria-label="Светлая тема" aria-pressed={theme === "light"} onClick={() => chooseTheme("light")}>
+              <SunIcon />
+            </button>
+            <button type="button" aria-label="Тёмная тема" aria-pressed={theme === "dark"} onClick={() => chooseTheme("dark")}>
+              <MoonIcon />
+            </button>
+          </div>
+          <button type="button" className="solid" onClick={() => setDraft(blankDraft())}>
+            Новая задача
+          </button>
+        </div>
       </header>
 
       {error && <p className="banner">{error}</p>}
-
-      {nagging.length > 0 && (
-        <section className="attention">
-          {nagging.map((card) => (
-            <article key={card.id}>
-              <strong>{card.title}</strong>
-              <span className="meta">
-                {isDeadlineDue(card, now) && card.deadlineAt
-                  ? `дедлайн просрочен на ${formatLate(card.deadlineAt, now)}`
-                  : card.startAt
-                    ? `пора начать, с ${formatTime(card.startAt)}`
-                    : "ждёт"}
-              </span>
-              <div className="actions">
-                <button type="button" className="tiny" onClick={() => void run(() => setStatus(card.id, "done"))}>
-                  Готово
-                </button>
-                {isDeadlineDue(card, now) &&
-                  SNOOZE.map((option) => (
-                    <button
-                      key={option.minutes}
-                      type="button"
-                      className="tiny late"
-                      onClick={() => void run(() => snoozeCard(card.id, option.minutes))}
-                    >
-                      {option.label}
-                    </button>
-                  ))}
-              </div>
-            </article>
-          ))}
-        </section>
-      )}
 
       <main className="work">
         {view === "calendar" ? (
           <div className="calendar">
             <section>
               <div className="month-head">
-                <button
-                  type="button"
-                  className="ghost"
-                  onClick={() => setMonth(new Date(month.getFullYear(), month.getMonth() - 1, 1))}
-                >
-                  ←
-                </button>
                 <h2>{monthLabel(month)}</h2>
-                <button
-                  type="button"
-                  className="ghost"
-                  onClick={() => setMonth(new Date(month.getFullYear(), month.getMonth() + 1, 1))}
-                >
-                  →
-                </button>
-                <button type="button" className="ghost" onClick={() => chooseDay(new Date())}>
-                  Сегодня
-                </button>
+                <div className="month-tools">
+                  <button
+                    type="button"
+                    className="ghost icon-button"
+                    onClick={() => setMonth(new Date(month.getFullYear(), month.getMonth() - 1, 1))}
+                  >
+                    ←
+                  </button>
+                  <button type="button" className="ghost" onClick={() => chooseDay(new Date())}>
+                    Сегодня
+                  </button>
+                  <button
+                    type="button"
+                    className="ghost icon-button"
+                    onClick={() => setMonth(new Date(month.getFullYear(), month.getMonth() + 1, 1))}
+                  >
+                    →
+                  </button>
+                </div>
               </div>
               <div className="week">
                 {WEEK.map((name) => (
@@ -328,7 +409,7 @@ export default function App() {
               <div className="grid">
                 {days.map((day) => {
                   const key = dayKey(day);
-                  const items = cards.filter((card) => placement(card, day));
+                  const items = cards.filter((card) => showsOn(card, day));
                   return (
                     <div
                       key={key}
@@ -376,28 +457,31 @@ export default function App() {
                   );
                 })}
               </div>
+              <DueStrip cards={nagging} now={now} run={run} />
             </section>
             <aside className="agenda">
               <div className="day-head">
                 <h2>
                   {selected.toLocaleDateString("ru-RU", { day: "numeric", month: "long" })}
                 </h2>
-                <button type="button" className="tiny" onClick={() => setDraft(blankDraft(selected))}>
+                <button type="button" className="tiny" onClick={() => setDraft(blankDraft())}>
                   Добавить
                 </button>
               </div>
               <div className="list">
                 {agenda.length === 0 && <p className="empty">На этот день пусто. Задача без даты живёт на доске.</p>}
-                {agenda.map((card) => {
-                  const where = placement(card, selected) ?? "both";
-                  return (
+                {agenda.map((card) => (
                     <article
                       key={card.id}
                       className={["row", card.status === "done" ? "done" : isDeadlineDue(card, now) ? "late" : ""].join(" ")}
-                      draggable
-                      onDragStart={(event) => startDrag(event, card, where)}
+                      onClick={(event) => {
+                        if ((event.target as HTMLElement).closest("button")) return;
+                        openView(card.id);
+                      }}
                     >
                       <strong>{card.title}</strong>
+                      {card.description.trim() && <p className="preview">{preview(card.description)}</p>}
+                      <span className="status">{columnTitle(card.status)}</span>
                       <span className="meta">{whenLine(card, now)}</span>
                       <div className="actions">
                         <button type="button" className="tiny" onClick={() => setDraft(draftFromCard(card))}>
@@ -410,20 +494,21 @@ export default function App() {
                         )}
                       </div>
                     </article>
-                  );
-                })}
+                ))}
               </div>
             </aside>
           </div>
-        ) : (
+        ) : view === "board" ? (
+          <div className="board-wrap">
           <div className="board">
-            {COLUMNS.map((column) => {
+            {columns.map((column) => {
               const items = cards
                 .filter((card) => card.status === column.id)
                 .sort((a, b) => rank(a, now) - rank(b, now));
               return (
                 <section
                   key={column.id}
+                  data-column={column.id}
                   className={dropColumn === column.id ? "column drop" : "column"}
                   onDragOver={(event) => {
                     event.preventDefault();
@@ -432,10 +517,12 @@ export default function App() {
                   onDragLeave={() => setDropColumn(null)}
                   onDrop={(event) => {
                     event.preventDefault();
-                    setDropColumn(null);
                     const payload = readDrag(event);
-                    if (!payload) return;
-                    void run(() => setStatus(payload.id, column.id));
+                    const id = payload?.id ?? draggingId;
+                    setDropColumn(null);
+                    setDraggingId(null);
+                    if (!id || id === "") return;
+                    void run(() => setStatus(id, column.id));
                   }}
                 >
                   <header>
@@ -449,11 +536,11 @@ export default function App() {
                     {items.map((card) => (
                       <article
                         key={card.id}
-                        className={["card", card.status === "done" ? "done" : isDeadlineDue(card, now) ? "late" : ""].join(" ")}
-                        draggable
-                        onDragStart={(event) => startDrag(event, card, placement(card, selected) ?? "both")}
+                        className={["card", draggingId === card.id ? "dragging" : "", card.status === "done" ? "done" : isDeadlineDue(card, now) ? "late" : ""].join(" ")}
+                        onPointerDown={(event) => beginBoardDrag(event, card.id)}
                       >
                         <strong>{card.title}</strong>
+                        {card.description.trim() && <p className="preview">{preview(card.description)}</p>}
                         <span className="meta">{whenLine(card, now)}</span>
                         <div className="actions">
                           <button type="button" className="tiny" onClick={() => setDraft(draftFromCard(card))}>
@@ -472,13 +559,71 @@ export default function App() {
               );
             })}
           </div>
+          <DueStrip cards={nagging} now={now} run={run} />
+          </div>
+        ) : (
+          <SettingsView
+            autostart={autostart}
+            columns={columns}
+            newStatus={newStatus}
+            onNewStatus={setNewStatus}
+            onAutostart={(enabled) => {
+              setAutostartOn(enabled);
+              void setAutostart(enabled)
+                .then((settings) => setAutostartOn(settings.autostart))
+                .catch((autostartError) => {
+                  setAutostartOn(!enabled);
+                  setError(explain(autostartError));
+                });
+            }}
+            onAdd={() => {
+              const title = newStatus.trim();
+              if (!title) return;
+              void addColumn(title)
+                .then((next) => {
+                  setColumns(next);
+                  setNewStatus("");
+                  setError("");
+                })
+                .catch((addError) => setError(explain(addError)));
+            }}
+            onRemove={(id) => {
+              void removeColumn(id)
+                .then((next) => {
+                  setColumns(next.columns);
+                  setCards(next.cards);
+                  setError("");
+                })
+                .catch((removeError) => setError(explain(removeError)));
+            }}
+          />
         )}
       </main>
 
       <p className="foot">
-        Напоминание каждые 10 минут, пока задача не в «Готово». Дедлайн можно отложить не больше чем на сутки.
+        Начало напоминает только в «К выполнению». Дедлайн — в любом статусе, кроме «Готово», каждые 10 минут. Отложить дедлайн можно не больше чем на сутки.
         Закрытие прячет окно в трей. Задачу можно продиктовать в чат — она попадёт сюда, если приложение запущено.
       </p>
+
+      {draggingId && dragPoint && (
+        <div className="drag-chip" style={{ left: dragPoint.x, top: dragPoint.y }}>
+          {cards.find((card) => card.id === draggingId)?.title}
+        </div>
+      )}
+
+      {viewId && cards.some((card) => card.id === viewId) && (
+        <TaskView
+          card={cards.find((card) => card.id === viewId) as Card}
+          statusTitle={columnTitle(cards.find((card) => card.id === viewId)?.status ?? "")}
+          onClose={() => setViewId(null)}
+          onEdit={() => {
+            const card = cards.find((item) => item.id === viewId);
+            if (!card) return;
+            setDraft(draftFromCard(card));
+            setViewId(null);
+          }}
+        />
+      )}
 
       {draft && (
         <div className="shade" onMouseDown={() => setDraft(null)}>
@@ -497,28 +642,85 @@ export default function App() {
               />
             </label>
             <label>
+              Описание
+              <textarea
+                rows={4}
+                value={draft.description}
+                onChange={(event) => setDraft({ ...draft, description: event.target.value })}
+              />
+            </label>
+            <label>
               Начало, если надо напомнить приступить
-              <input
-                type="datetime-local"
+              <DateField
+                key={`${draft.id ?? "new"}-start`}
                 value={draft.startAt}
-                onChange={(event) => setDraft({ ...draft, startAt: event.target.value })}
+                onChange={(startAt) => setDraft({ ...draft, startAt })}
               />
             </label>
             <label>
               Дедлайн
-              <input
-                type="datetime-local"
+              <DateField
+                key={`${draft.id ?? "new"}-deadline`}
                 value={draft.deadlineAt}
-                onChange={(event) => setDraft({ ...draft, deadlineAt: event.target.value })}
+                onChange={(deadlineAt) => setDraft({ ...draft, deadlineAt })}
               />
             </label>
+            <label className="check">
+              <input
+                type="checkbox"
+                checked={draft.repeat}
+                onChange={(event) => setDraft({ ...draft, repeat: event.target.checked })}
+              />
+              Повтор по дням недели
+            </label>
+            {draft.repeat && (
+              <>
+                <label>
+                  С даты
+                  <DateField
+                    key={`${draft.id ?? "new"}-from`}
+                    withTime={false}
+                    value={draft.repeatFrom}
+                    onChange={(repeatFrom) => setDraft({ ...draft, repeatFrom })}
+                  />
+                </label>
+                <label>
+                  По дату
+                  <DateField
+                    key={`${draft.id ?? "new"}-until`}
+                    withTime={false}
+                    value={draft.repeatUntil}
+                    onChange={(repeatUntil) => setDraft({ ...draft, repeatUntil })}
+                  />
+                </label>
+                <div className="weekdays">
+                  {WEEKDAYS.map((day) => (
+                    <button
+                      key={day.id}
+                      type="button"
+                      aria-pressed={draft.weekdays.includes(day.id)}
+                      onClick={() =>
+                        setDraft({
+                          ...draft,
+                          weekdays: draft.weekdays.includes(day.id)
+                            ? draft.weekdays.filter((item) => item !== day.id)
+                            : [...draft.weekdays, day.id],
+                        })
+                      }
+                    >
+                      {day.label}
+                    </button>
+                  ))}
+                </div>
+              </>
+            )}
             <label>
               Статус
               <select
                 value={draft.status}
-                onChange={(event) => setDraft({ ...draft, status: event.target.value as Status })}
+                onChange={(event) => setDraft({ ...draft, status: event.target.value })}
               >
-                {COLUMNS.map((column) => (
+                {columns.map((column) => (
                   <option key={column.id} value={column.id}>
                     {column.title}
                   </option>
@@ -526,7 +728,7 @@ export default function App() {
               </select>
             </label>
             <p className="hint">
-              После начала напоминания идут каждые 10 минут, пока задача не закрыта. У дедлайна то же самое, но его можно отложить.
+              Начало напоминает каждые 10 минут, только пока задача в «К выполнению». Дедлайн напоминает в остальных статусах тоже, пока она не в «Готово». Delete в дате стирает текущие цифры и переходит к следующим.
             </p>
             {draft.id && isDeadlineDue(inputAsCard(draft), now) && (
               <div className="field">
@@ -603,7 +805,264 @@ export default function App() {
           </form>
         </div>
       )}
+
     </div>
+  );
+}
+
+function SettingsView({
+  autostart,
+  columns,
+  newStatus,
+  onNewStatus,
+  onAutostart,
+  onAdd,
+  onRemove,
+}: {
+  autostart: boolean;
+  columns: Column[];
+  newStatus: string;
+  onNewStatus: (value: string) => void;
+  onAutostart: (enabled: boolean) => void;
+  onAdd: () => void;
+  onRemove: (id: string) => void;
+}) {
+  return (
+    <section className="settings">
+      <h2>Настройки</h2>
+      <article className="setting">
+        <div>
+          <strong>Автозапуск</strong>
+          <p>Открывать вместе с системой</p>
+        </div>
+        <button
+          type="button"
+          className={autostart ? "tumbler on" : "tumbler"}
+          aria-pressed={autostart}
+          aria-label="Автозапуск"
+          onClick={() => onAutostart(!autostart)}
+        >
+          <span />
+        </button>
+      </article>
+      <article className="setting column-setting">
+        <div>
+          <strong>Статусы доски</strong>
+          <p>«К выполнению» и «Готово» остаются всегда. Остальные можно убрать или добавить.</p>
+        </div>
+        <div className="list">
+          {columns.map((column) => (
+            <div key={column.id} className="status-row">
+              <strong>{column.title}</strong>
+              {column.id !== TODO && column.id !== DONE ? (
+                <button type="button" className="tiny late" onClick={() => onRemove(column.id)}>
+                  Убрать
+                </button>
+              ) : (
+                <span className="meta">всегда</span>
+              )}
+            </div>
+          ))}
+        </div>
+        <form
+          className="status-add"
+          onSubmit={(event) => {
+            event.preventDefault();
+            onAdd();
+          }}
+        >
+          <input
+            value={newStatus}
+            placeholder="Новый статус"
+            onChange={(event) => onNewStatus(event.target.value)}
+          />
+          <button type="submit" className="solid">
+            Добавить
+          </button>
+        </form>
+      </article>
+    </section>
+  );
+}
+
+function NagPopup() {
+  const [items, setItems] = useState<Card[]>([]);
+
+  function apply(all: Card[]) {
+    const due = all.filter((card) => isNagging(card, new Date()));
+    setItems(due);
+    if (due.length === 0) void hideNag();
+  }
+
+  async function load() {
+    apply(await listCards());
+  }
+
+  useEffect(() => {
+    void load();
+    const timer = window.setInterval(() => void load(), 5000);
+    let unlistenRefresh: (() => void) | undefined;
+    let unlistenCards: (() => void) | undefined;
+    void listen("nag-refresh", () => void load()).then((stop) => {
+      unlistenRefresh = stop;
+    });
+    void listen<Card[]>("cards-changed", (event) => apply(event.payload)).then((stop) => {
+      unlistenCards = stop;
+    });
+    return () => {
+      window.clearInterval(timer);
+      unlistenRefresh?.();
+      unlistenCards?.();
+    };
+  }, []);
+
+  function dragWindow(event: React.PointerEvent) {
+    if ((event.target as HTMLElement).closest("button")) return;
+    void getCurrentWindow().startDragging();
+  }
+
+  return (
+    <div className="nag">
+      <header className="nag-bar">
+        <strong data-tauri-drag-region onPointerDown={dragWindow}>
+          inzh's work calendar
+        </strong>
+        <button type="button" className="nag-close" onClick={() => void hideNag()}>
+          Закрыть
+        </button>
+      </header>
+      {items.map((card) => (
+        <article key={card.id}>
+          <b>{card.title}</b>
+          <span>
+            {isDeadlineDue(card, new Date()) ? "Дедлайн" : "Пора начать"}
+            {card.deadlineAt ? ` · ${formatDayTime(card.deadlineAt)}` : ""}
+          </span>
+          <div className="actions">
+            <button type="button" className="solid" onClick={() => void setStatus(card.id, "done").then(load)}>
+              Готово
+            </button>
+            {isDeadlineDue(card, new Date()) &&
+              SNOOZE.map((option) => (
+                <button
+                  key={option.minutes}
+                  type="button"
+                  className="tiny"
+                  onClick={() => void snoozeCard(card.id, option.minutes).then(load)}
+                >
+                  {option.label}
+                </button>
+              ))}
+          </div>
+        </article>
+      ))}
+    </div>
+  );
+}
+
+function preview(text: string): string {
+  const clean = text.replace(/\s+/g, " ").trim();
+  if (clean.length <= 180) return clean;
+  return `${clean.slice(0, 180).trimEnd()}…`;
+}
+
+function DueStrip({
+  cards,
+  now,
+  run,
+}: {
+  cards: Card[];
+  now: Date;
+  run: (action: () => Promise<Card[]>) => Promise<boolean>;
+}) {
+  if (cards.length === 0) return null;
+  return (
+    <section className="attention">
+      {cards.map((card) => (
+        <article key={card.id}>
+          <strong>{card.title}</strong>
+          <span className="meta">
+            {isDeadlineDue(card, now) && card.deadlineAt
+              ? `дедлайн просрочен на ${formatLate(card.deadlineAt, now)}`
+              : card.startAt
+                ? `пора начать, с ${formatTime(card.startAt)}`
+                : "ждёт"}
+          </span>
+          <div className="actions">
+            <button type="button" className="tiny" onClick={() => void run(() => setStatus(card.id, "done"))}>
+              Готово
+            </button>
+            {isDeadlineDue(card, now) &&
+              SNOOZE.map((option) => (
+                <button
+                  key={option.minutes}
+                  type="button"
+                  className="tiny late"
+                  onClick={() => void run(() => snoozeCard(card.id, option.minutes))}
+                >
+                  {option.label}
+                </button>
+              ))}
+          </div>
+        </article>
+      ))}
+    </section>
+  );
+}
+
+function TaskView({
+  card,
+  statusTitle,
+  onClose,
+  onEdit,
+}: {
+  card: Card;
+  statusTitle: string;
+  onClose: () => void;
+  onEdit: () => void;
+}) {
+  return (
+    <div className="shade" onMouseDown={onClose}>
+      <article className="viewer" onMouseDown={(event) => event.stopPropagation()}>
+        <h2>{card.title}</h2>
+        <p className="meta">{statusTitle}</p>
+        {card.description.trim() ? <p className="preview">{card.description}</p> : <p className="empty">Без описания</p>}
+        <p className="meta">{whenLine(card, new Date())}</p>
+        {card.recurrence && (
+          <p className="meta">
+            Повтор {card.recurrence.from} — {card.recurrence.until},{" "}
+            {card.recurrence.weekdays
+              .map((id) => WEEKDAYS.find((day) => day.id === id)?.label ?? String(id))
+              .join(" ")}
+          </p>
+        )}
+        <div className="actions">
+          <button type="button" className="ghost" onClick={onClose}>
+            Закрыть
+          </button>
+          <button type="button" className="solid" onClick={onEdit}>
+            Изменить
+          </button>
+        </div>
+      </article>
+    </div>
+  );
+}
+
+function SunIcon() {
+  return (
+    <svg viewBox="0 0 24 24" aria-hidden="true">
+      <circle cx="12" cy="12" r="4" />
+      <path d="M12 2.5v2.5M12 19v2.5M2.5 12H5M19 12h2.5M5 5l1.8 1.8M17.2 17.2 19 19M19 5l-1.8 1.8M6.8 17.2 5 19" />
+    </svg>
+  );
+}
+
+function MoonIcon() {
+  return (
+    <svg viewBox="0 0 24 24" aria-hidden="true">
+      <path d="M16 3.2A8.5 8.5 0 1 0 20.8 15 7 7 0 0 1 16 3.2Z" />
+    </svg>
   );
 }
 
@@ -628,6 +1087,7 @@ function inputAsCard(draft: Draft): Card {
   return {
     id: draft.id ?? "",
     title: draft.title,
+    description: draft.description,
     status: draft.status,
     startAt: fromLocalInput(draft.startAt),
     deadlineAt: fromLocalInput(draft.deadlineAt),
@@ -636,5 +1096,6 @@ function inputAsCard(draft: Draft): Card {
     lastDeadlineNotifiedAt: null,
     createdAt: "",
     completedAt: null,
+    recurrence: null,
   };
 }

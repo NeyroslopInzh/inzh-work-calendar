@@ -8,11 +8,11 @@ use std::time::Duration;
 
 use tauri::menu::{Menu, MenuItem};
 use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
-use tauri::{Manager, WindowEvent};
+use tauri::{Emitter, Manager, WindowEvent};
 use tauri_plugin_autostart::ManagerExt;
 use tauri_plugin_notification::NotificationExt;
 
-use crate::model::{CardInput, Settings, Status};
+use crate::model::{CardInput, Column, Settings};
 use crate::schedule::reveal;
 use crate::store::Store;
 
@@ -24,31 +24,73 @@ fn list_cards(store: tauri::State<Store>) -> Vec<model::Card> {
 }
 
 #[tauri::command]
-fn save_card(store: tauri::State<Store>, input: CardInput) -> Result<Vec<model::Card>, String> {
-    store.save_card(input)
+fn save_card(
+    app: tauri::AppHandle,
+    store: tauri::State<Store>,
+    input: CardInput,
+) -> Result<Vec<model::Card>, String> {
+    Ok(broadcast_cards(&app, store.save_card(input)?))
 }
 
 #[tauri::command]
 fn set_status(
+    app: tauri::AppHandle,
     store: tauri::State<Store>,
     id: String,
-    status: Status,
+    status: String,
 ) -> Result<Vec<model::Card>, String> {
-    store.set_status(&id, status)
+    Ok(broadcast_cards(&app, store.set_status(&id, &status)?))
 }
 
 #[tauri::command]
-fn delete_card(store: tauri::State<Store>, id: String) -> Result<Vec<model::Card>, String> {
-    store.delete(&id)
+fn list_columns(store: tauri::State<Store>) -> Vec<Column> {
+    store.columns()
+}
+
+#[tauri::command]
+fn add_column(store: tauri::State<Store>, title: String) -> Result<Vec<Column>, String> {
+    store.add_column(&title)
+}
+
+#[tauri::command]
+fn remove_column(
+    app: tauri::AppHandle,
+    store: tauri::State<Store>,
+    id: String,
+) -> Result<model::ColumnChange, String> {
+    let change = store.remove_column(&id)?;
+    broadcast_cards(&app, change.cards.clone());
+    Ok(change)
+}
+
+#[tauri::command]
+fn delete_card(
+    app: tauri::AppHandle,
+    store: tauri::State<Store>,
+    id: String,
+) -> Result<Vec<model::Card>, String> {
+    Ok(broadcast_cards(&app, store.delete(&id)?))
 }
 
 #[tauri::command]
 fn snooze_card(
+    app: tauri::AppHandle,
     store: tauri::State<Store>,
     id: String,
     minutes: u32,
 ) -> Result<Vec<model::Card>, String> {
-    store.snooze(&id, minutes)
+    Ok(broadcast_cards(&app, store.snooze(&id, minutes)?))
+}
+
+#[tauri::command]
+fn hide_nag(app: tauri::AppHandle) {
+    schedule::hide_nag_window(&app);
+}
+
+fn broadcast_cards(app: &tauri::AppHandle, cards: Vec<model::Card>) -> Vec<model::Card> {
+    let _ = app.emit("cards-changed", &cards);
+    schedule::sync_nag_window(app);
+    cards
 }
 
 #[tauri::command]
@@ -63,8 +105,15 @@ fn set_autostart(app: tauri::AppHandle, enabled: bool) -> Result<Settings, Strin
     app.state::<Store>().set_autostart_flag(enabled)
 }
 
+#[tauri::command]
+fn set_theme(store: tauri::State<Store>, theme: String) -> Result<Settings, String> {
+    store.set_theme(&theme)
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    #[cfg(windows)]
+    set_windows_aumid();
     tauri::Builder::default()
         .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
             reveal(app);
@@ -123,13 +172,27 @@ pub fn run() {
             list_cards,
             save_card,
             set_status,
+            list_columns,
+            add_column,
+            remove_column,
             delete_card,
             snooze_card,
+            hide_nag,
             get_settings,
-            set_autostart
+            set_autostart,
+            set_theme
         ])
         .run(tauri::generate_context!())
         .expect("inzh work calendar не запустился");
+}
+
+#[cfg(windows)]
+fn set_windows_aumid() {
+    use windows::Win32::UI::Shell::SetCurrentProcessExplicitAppUserModelID;
+    use windows::core::w;
+    unsafe {
+        let _ = SetCurrentProcessExplicitAppUserModelID(w!("com.inzh.workcalendar"));
+    }
 }
 
 fn apply_autostart(app: &tauri::AppHandle, enabled: bool) -> Result<(), String> {
@@ -146,7 +209,7 @@ fn setup_tray(app: &tauri::AppHandle) -> Result<(), Box<dyn std::error::Error>> 
     let quit = MenuItem::with_id(app, "quit", "Выход", true, None::<&str>)?;
     let menu = Menu::with_items(app, &[&show, &quit])?;
     let mut tray = TrayIconBuilder::new()
-        .tooltip("inzh work calendar")
+        .tooltip("inzh's work calendar")
         .menu(&menu)
         .show_menu_on_left_click(false)
         .on_menu_event(|app, event| match event.id().as_ref() {

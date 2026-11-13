@@ -7,7 +7,9 @@ use tauri::{AppHandle, Manager};
 use uuid::Uuid;
 
 use crate::model::{
-    mark_notified, nag_kind, Card, CardInput, NagKind, Settings, Status, MAX_SNOOZE_MINUTES,
+    checked_recurrence, mark_notified, nag_kind, needs_attention, normalize_columns, Card, CardInput,
+    Column,
+    NagKind, Settings, DONE_ID, MAX_SNOOZE_MINUTES, TODO_ID,
 };
 
 pub struct Store {
@@ -26,14 +28,19 @@ impl Store {
         let cards_path = dir.join("cards.json");
         let settings_path = dir.join("settings.json");
         let settings_existed = settings_path.exists();
-        Ok(Self {
+        let mut settings: Settings = read_json(&settings_path)?;
+        let columns = normalize_columns(settings.columns);
+        settings.columns = columns;
+        let store = Self {
             dir,
             cards: Mutex::new(read_json(&cards_path)?),
-            settings: Mutex::new(read_json(&settings_path)?),
+            settings: Mutex::new(settings),
             cards_path,
             settings_path,
             settings_existed,
-        })
+        };
+        write_json(&store.settings_path, &*lock(&store.settings))?;
+        Ok(store)
     }
 
     pub fn directory(&self) -> &Path {
@@ -52,6 +59,77 @@ impl Store {
         lock(&self.settings).clone()
     }
 
+    pub fn columns(&self) -> Vec<Column> {
+        lock(&self.settings).columns.clone()
+    }
+
+    pub fn add_column(&self, title: &str) -> Result<Vec<Column>, String> {
+        let title = title.trim();
+        if title.is_empty() {
+            return Err("Нужно название статуса".into());
+        }
+        if title.chars().count() > 40 {
+            return Err("Название статуса длиннее 40 символов".into());
+        }
+        let mut settings = lock(&self.settings);
+        if settings
+            .columns
+            .iter()
+            .any(|column| column.title.to_lowercase() == title.to_lowercase())
+        {
+            return Err("Такой статус уже есть".into());
+        }
+        let done_at = settings
+            .columns
+            .iter()
+            .position(|column| column.id == DONE_ID)
+            .unwrap_or(settings.columns.len());
+        settings.columns.insert(
+            done_at,
+            Column {
+                id: Uuid::new_v4().to_string(),
+                title: title.to_string(),
+            },
+        );
+        write_json(&self.settings_path, &*settings)?;
+        Ok(settings.columns.clone())
+    }
+
+    pub fn remove_column(&self, id: &str) -> Result<crate::model::ColumnChange, String> {
+        if id == TODO_ID || id == DONE_ID {
+            return Err("«К выполнению» и «Готово» нельзя убрать".into());
+        }
+        if !self.columns().iter().any(|column| column.id == id) {
+            return Err("Статус не найден".into());
+        }
+        let cards = self.update_cards(|cards| {
+            for card in cards.iter_mut() {
+                if card.status == id {
+                    card.status = TODO_ID.to_string();
+                    card.completed_at = None;
+                }
+            }
+            Ok(())
+        })?;
+        let mut settings = lock(&self.settings);
+        settings.columns.retain(|column| column.id != id);
+        write_json(&self.settings_path, &*settings)?;
+        Ok(crate::model::ColumnChange {
+            columns: settings.columns.clone(),
+            cards,
+        })
+    }
+
+    pub fn set_theme(&self, theme: &str) -> Result<Settings, String> {
+        if theme != "dark" && theme != "light" {
+            return Err("Тема может быть светлой или тёмной".into());
+        }
+        let mut settings = lock(&self.settings);
+        settings.theme = theme.to_string();
+        write_json(&self.settings_path, &*settings)?;
+        Ok(settings.clone())
+    }
+
     pub fn set_autostart_flag(&self, enabled: bool) -> Result<Settings, String> {
         let mut settings = lock(&self.settings);
         settings.autostart = enabled;
@@ -68,6 +146,17 @@ impl Store {
         if title.chars().count() > 160 {
             return Err("Название длиннее 160 символов".into());
         }
+        let description = input.description.trim();
+        if description.chars().count() > 4000 {
+            return Err("Описание длиннее 4000 символов".into());
+        }
+        if !self.columns().iter().any(|column| column.id == input.status) {
+            return Err("Неизвестный статус".into());
+        }
+        let recurrence = match &input.recurrence {
+            Some(rule) => Some(checked_recurrence(rule)?),
+            None => None,
+        };
         if let (Some(start), Some(deadline)) = (input.start_at, input.deadline_at) {
             if deadline < start {
                 return Err("Дедлайн раньше начала".into());
@@ -87,15 +176,18 @@ impl Store {
                     card.snooze_until = None;
                 }
                 card.title = title.to_string();
-                card.status = input.status;
+                card.description = description.to_string();
+                card.status = input.status.clone();
                 card.start_at = input.start_at;
                 card.deadline_at = input.deadline_at;
+                card.recurrence = recurrence.clone();
                 apply_completion(card, now);
             } else {
                 let mut card = Card {
                     id: Uuid::new_v4().to_string(),
                     title: title.to_string(),
-                    status: input.status,
+                    description: description.to_string(),
+                    status: input.status.clone(),
                     start_at: input.start_at,
                     deadline_at: input.deadline_at,
                     snooze_until: None,
@@ -103,6 +195,7 @@ impl Store {
                     last_deadline_notified_at: None,
                     created_at: now,
                     completed_at: None,
+                    recurrence: recurrence.clone(),
                 };
                 apply_completion(&mut card, now);
                 cards.push(card);
@@ -111,8 +204,12 @@ impl Store {
         })
     }
 
-    pub fn set_status(&self, id: &str, status: Status) -> Result<Vec<Card>, String> {
+    pub fn set_status(&self, id: &str, status: &str) -> Result<Vec<Card>, String> {
+        if !self.columns().iter().any(|column| column.id == status) {
+            return Err("Неизвестный статус".into());
+        }
         let now = Utc::now();
+        let status = status.to_string();
         self.update_cards(|cards| {
             let Some(card) = cards.iter_mut().find(|card| card.id == id) else {
                 return Err("Задача не найдена".into());
@@ -143,7 +240,7 @@ impl Store {
             let Some(card) = cards.iter_mut().find(|card| card.id == id) else {
                 return Err("Задача не найдена".into());
             };
-            if card.status == Status::Done {
+            if card.status == DONE_ID {
                 return Err("Завершённую задачу не нужно откладывать".into());
             }
             let Some(deadline) = card.deadline_at else {
@@ -163,6 +260,14 @@ impl Store {
         lock(&self.cards)
             .iter()
             .filter_map(|card| nag_kind(card, now).map(|kind| (card.clone(), kind)))
+            .collect()
+    }
+
+    pub fn attention(&self, now: DateTime<Utc>) -> Vec<Card> {
+        lock(&self.cards)
+            .iter()
+            .filter(|card| needs_attention(card, now))
+            .cloned()
             .collect()
     }
 
@@ -188,7 +293,7 @@ impl Store {
 }
 
 fn apply_completion(card: &mut Card, now: DateTime<Utc>) {
-    if card.status == Status::Done {
+    if card.status == DONE_ID {
         if card.completed_at.is_none() {
             card.completed_at = Some(now);
         }

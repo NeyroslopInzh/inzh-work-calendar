@@ -10,7 +10,7 @@ use tauri::{AppHandle, Emitter, Manager};
 use tiny_http::{Header, Method, Request, Response, Server, StatusCode};
 use uuid::Uuid;
 
-use crate::model::{Card, CardInput, Status};
+use crate::model::{Card, CardInput, Recurrence, TODO_ID};
 use crate::store::Store;
 
 const PORTS: std::ops::Range<u16> = 47321..47331;
@@ -159,6 +159,7 @@ fn route(app: &AppHandle, method: &Method, path: &str, body: &str) -> Result<Val
 
 fn publish(app: &AppHandle) {
     let _ = app.emit("cards-changed", app.state::<Store>().list());
+    crate::schedule::sync_nag_window(app);
 }
 
 fn find_card(cards: &[Card], id: &str) -> Result<Card, String> {
@@ -238,11 +239,15 @@ fn consume(app: &AppHandle, path: &Path) -> Result<bool, String> {
 struct Incoming {
     title: String,
     #[serde(default)]
+    description: Option<String>,
+    #[serde(default)]
     start_at: Option<String>,
     #[serde(default)]
     deadline_at: Option<String>,
     #[serde(default)]
-    status: Option<Status>,
+    status: Option<String>,
+    #[serde(default)]
+    recurrence: Option<Recurrence>,
 }
 
 fn incoming_to_input(body: &str, id: Option<String>) -> Result<CardInput, String> {
@@ -250,9 +255,11 @@ fn incoming_to_input(body: &str, id: Option<String>) -> Result<CardInput, String
     Ok(CardInput {
         id,
         title: incoming.title,
-        status: incoming.status.unwrap_or(Status::Todo),
+        description: incoming.description.unwrap_or_default(),
+        status: incoming.status.unwrap_or_else(|| TODO_ID.to_string()),
         start_at: optional_when(incoming.start_at, "startAt")?,
         deadline_at: optional_when(incoming.deadline_at, "deadlineAt")?,
+        recurrence: incoming.recurrence,
     })
 }
 
@@ -263,16 +270,30 @@ fn patch_input(card: &Card, body: &str) -> Result<CardInput, String> {
         Some(Value::String(title)) => title.clone(),
         Some(_) => return Err("title должен быть строкой".into()),
     };
+    let description = match value.get("description") {
+        None => card.description.clone(),
+        Some(Value::String(description)) => description.clone(),
+        Some(Value::Null) => String::new(),
+        Some(_) => return Err("description должно быть строкой".into()),
+    };
     let status = match value.get("status") {
-        None => card.status,
+        None => card.status.clone(),
         Some(status) => serde_json::from_value(status.clone()).map_err(|_| "неизвестный статус".to_string())?,
     };
     Ok(CardInput {
         id: Some(card.id.clone()),
         title,
+        description,
         status,
         start_at: take_time(&value, "startAt", card.start_at)?,
         deadline_at: take_time(&value, "deadlineAt", card.deadline_at)?,
+        recurrence: match value.get("recurrence") {
+            None => card.recurrence.clone(),
+            Some(Value::Null) => None,
+            Some(rule) => Some(
+                serde_json::from_value(rule.clone()).map_err(|err| err.to_string())?,
+            ),
+        },
     })
 }
 
