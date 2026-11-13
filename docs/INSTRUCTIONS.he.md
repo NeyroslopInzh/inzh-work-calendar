@@ -168,8 +168,8 @@ chmod +x inzh.work.calendar_*_amd64.AppImage
 ## בניית ריליז
 
 ```bash
-git tag v0.2.0
-git push origin v0.2.0
+git tag v0.2.1
+git push origin v0.2.1
 ```
 
 GitHub Actions יבנה Windows ‏(NSIS) ו-Linux ‏(`.deb`, AppImage). ה-workflow הוא `.github/workflows/release.yml`.

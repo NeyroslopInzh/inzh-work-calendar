@@ -168,8 +168,8 @@ FUSE is often missing. Install `libfuse2` and run the file again.
 ## Release build
 
 ```bash
-git tag v0.2.0
-git push origin v0.2.0
+git tag v0.2.1
+git push origin v0.2.1
 ```
 
 GitHub Actions builds Windows (NSIS) and Linux (`.deb`, AppImage). The workflow is `.github/workflows/release.yml`.

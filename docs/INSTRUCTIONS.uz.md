@@ -168,8 +168,8 @@ Ko‘pincha FUSE yetishmaydi. `libfuse2` o‘rnating va faylni qayta ishga tushi
 ## Reliz yig‘ish
 
 ```bash
-git tag v0.2.0
-git push origin v0.2.0
+git tag v0.2.1
+git push origin v0.2.1
 ```
 
 GitHub Actions Windows (NSIS) va Linux (`.deb`, AppImage) yig‘adi. Workflow — `.github/workflows/release.yml`.

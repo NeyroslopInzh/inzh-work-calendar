@@ -168,8 +168,8 @@ Linux पर `XDG_DATA_HOME` सेट हो तो डायरेक्टर
 ## रिलीज़ बिल्ड
 
 ```bash
-git tag v0.2.0
-git push origin v0.2.0
+git tag v0.2.1
+git push origin v0.2.1
 ```
 
 GitHub Actions Windows (NSIS) और Linux (`.deb`, AppImage) बनाएगा। Workflow — `.github/workflows/release.yml`।
