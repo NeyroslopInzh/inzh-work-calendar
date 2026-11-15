@@ -1,4 +1,4 @@
-use chrono::{Datelike, DateTime, Days, Duration, NaiveDate, Utc};
+use chrono::{DateTime, Datelike, Days, Duration, NaiveDate, Utc};
 use serde::{Deserialize, Serialize};
 
 pub const NAG_GAP: Duration = Duration::minutes(10);
@@ -40,7 +40,10 @@ pub fn normalize_columns(columns: Vec<Column>) -> Vec<Column> {
         if column.id == TODO_ID || column.id == DONE_ID || column.title.trim().is_empty() {
             continue;
         }
-        if middle.iter().any(|existing: &Column| existing.id == column.id) {
+        if middle
+            .iter()
+            .any(|existing: &Column| existing.id == column.id)
+        {
             continue;
         }
         middle.push(Column {
@@ -132,6 +135,9 @@ pub struct Card {
     pub completed_at: Option<DateTime<Utc>>,
     #[serde(default)]
     pub recurrence: Option<Recurrence>,
+    /// Telegram recipients chosen for this card. Empty means the reminder stays on this computer.
+    #[serde(default)]
+    pub recipient_ids: Vec<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -146,6 +152,27 @@ pub struct CardInput {
     pub deadline_at: Option<DateTime<Utc>>,
     #[serde(default)]
     pub recurrence: Option<Recurrence>,
+    /// None keeps the previous list on edit and the default list on create.
+    #[serde(default)]
+    pub recipient_ids: Option<Vec<String>>,
+}
+
+pub const MAX_RECIPIENTS: usize = 100;
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TelegramRecipient {
+    pub id: String,
+    pub chat_id: i64,
+    pub name: String,
+    pub username: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TelegramContact {
+    pub chat_id: i64,
+    pub name: String,
+    pub username: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -156,6 +183,18 @@ pub struct Settings {
     pub columns: Vec<Column>,
     #[serde(default = "default_theme")]
     pub theme: String,
+    #[serde(default)]
+    pub telegram_token: String,
+    #[serde(default)]
+    pub telegram_bot: String,
+    #[serde(default)]
+    pub telegram_invite: String,
+    #[serde(default)]
+    pub telegram_always: bool,
+    #[serde(default)]
+    pub telegram_offset: i64,
+    #[serde(default)]
+    pub recipients: Vec<TelegramRecipient>,
 }
 
 impl Default for Settings {
@@ -164,8 +203,74 @@ impl Default for Settings {
             autostart: true,
             columns: default_columns(),
             theme: default_theme(),
+            telegram_token: String::new(),
+            telegram_bot: String::new(),
+            telegram_invite: String::new(),
+            telegram_always: false,
+            telegram_offset: 0,
+            recipients: Vec::new(),
         }
     }
+}
+
+pub fn default_recipient_ids(settings: &Settings) -> Vec<String> {
+    if settings.telegram_always {
+        settings
+            .recipients
+            .iter()
+            .map(|recipient| recipient.id.clone())
+            .collect()
+    } else {
+        Vec::new()
+    }
+}
+
+/// `specified` is what the editor sent. `existing` is the saved card; None means the card is new.
+pub fn recipient_ids_for_save(
+    specified: Option<&[String]>,
+    existing: Option<&[String]>,
+    known: &[String],
+    defaults: &[String],
+) -> Vec<String> {
+    let source = specified.or(existing).unwrap_or(defaults);
+    let mut chosen = Vec::new();
+    for id in source {
+        if known.iter().any(|item| item == id) && !chosen.iter().any(|item: &String| item == id) {
+            chosen.push(id.clone());
+        }
+    }
+    chosen
+}
+
+pub fn merge_recipients(
+    recipients: &mut Vec<TelegramRecipient>,
+    contacts: &[TelegramContact],
+) -> bool {
+    let mut changed = false;
+    for contact in contacts {
+        if contact.chat_id == 0 || contact.name.trim().is_empty() {
+            continue;
+        }
+        if let Some(found) = recipients
+            .iter_mut()
+            .find(|item| item.chat_id == contact.chat_id)
+        {
+            if found.name != contact.name || found.username != contact.username {
+                found.name = contact.name.clone();
+                found.username = contact.username.clone();
+                changed = true;
+            }
+        } else if recipients.len() < MAX_RECIPIENTS {
+            recipients.push(TelegramRecipient {
+                id: uuid::Uuid::new_v4().to_string(),
+                chat_id: contact.chat_id,
+                name: contact.name.clone(),
+                username: contact.username.clone(),
+            });
+            changed = true;
+        }
+    }
+    changed
 }
 
 /// What should fire right now.
@@ -255,6 +360,7 @@ mod tests {
             last_deadline_notified_at: None,
             created_at: at(8, 0),
             completed_at: None,
+            recipient_ids: Vec::new(),
         }
     }
 
@@ -319,5 +425,91 @@ mod tests {
         item.start_at = None;
         item.deadline_at = None;
         assert_eq!(nag_kind(&item, at(23, 0)), None);
+    }
+
+    #[test]
+    fn card_without_recipients_defaults_to_nobody() {
+        let card: Card = serde_json::from_str(
+            r#"{"id":"1","title":"a","status":"todo","createdAt":"2026-11-13T08:00:00Z"}"#,
+        )
+        .unwrap();
+        assert!(card.recipient_ids.is_empty());
+    }
+
+    #[test]
+    fn settings_without_telegram_stay_empty() {
+        let settings: Settings = serde_json::from_str(r#"{"autostart":false}"#).unwrap();
+        assert!(!settings.telegram_always);
+        assert!(settings.telegram_token.is_empty());
+        assert!(settings.recipients.is_empty());
+    }
+
+    #[test]
+    fn new_task_takes_everyone_only_when_always_is_on() {
+        let known = vec!["a".to_string(), "b".to_string()];
+        let defaults = known.clone();
+        assert!(recipient_ids_for_save(None, None, &known, &[]).is_empty());
+        assert_eq!(
+            recipient_ids_for_save(None, None, &known, &defaults),
+            defaults
+        );
+        let picked = vec!["b".to_string(), "missing".to_string(), "b".to_string()];
+        assert_eq!(
+            recipient_ids_for_save(Some(&picked), None, &known, &defaults),
+            vec!["b".to_string()]
+        );
+        let saved = vec!["a".to_string()];
+        assert_eq!(
+            recipient_ids_for_save(None, Some(&saved), &known, &defaults),
+            saved
+        );
+    }
+
+    #[test]
+    fn merge_keeps_the_same_person_and_stops_at_the_cap() {
+        let mut recipients = vec![TelegramRecipient {
+            id: "keep".into(),
+            chat_id: 42,
+            name: "Анна".into(),
+            username: String::new(),
+        }];
+        assert!(merge_recipients(
+            &mut recipients,
+            &[TelegramContact {
+                chat_id: 42,
+                name: "Анна Иванова".into(),
+                username: "anna".into(),
+            }]
+        ));
+        assert_eq!(recipients.len(), 1);
+        assert_eq!(recipients[0].id, "keep");
+        assert_eq!(recipients[0].username, "anna");
+        assert!(!merge_recipients(
+            &mut recipients,
+            &[TelegramContact {
+                chat_id: 42,
+                name: "Анна Иванова".into(),
+                username: "anna".into(),
+            }]
+        ));
+
+        let mut full = Vec::new();
+        for chat_id in 1..=MAX_RECIPIENTS as i64 {
+            full.push(TelegramRecipient {
+                id: chat_id.to_string(),
+                chat_id,
+                name: "человек".into(),
+                username: String::new(),
+            });
+        }
+        assert!(!merge_recipients(
+            &mut full,
+            &[TelegramContact {
+                chat_id: 10_000,
+                name: "лишний".into(),
+                username: String::new(),
+            }]
+        ));
+        assert_eq!(full.len(), MAX_RECIPIENTS);
     }
 }

@@ -20,6 +20,7 @@ pub fn tick(app: &AppHandle) -> Result<(), String> {
             Ok(()) => {
                 app.state::<Store>().acknowledge(&card.id, kind, now)?;
                 sent = true;
+                send_telegram(app, &card, kind, now);
             }
             Err(err) => eprintln!("уведомление «{}»: {err}", card.title),
         }
@@ -184,11 +185,42 @@ fn show_plugin_toast(
         .map_err(|err| err.to_string())
 }
 
+fn send_telegram(app: &AppHandle, card: &crate::model::Card, kind: NagKind, now: DateTime<Utc>) {
+    let settings = app.state::<Store>().settings();
+    let token = settings.telegram_token.trim().to_string();
+    if token.is_empty() || card.recipient_ids.is_empty() {
+        return;
+    }
+    let chats: Vec<i64> = settings
+        .recipients
+        .iter()
+        .filter(|recipient| card.recipient_ids.iter().any(|id| id == &recipient.id))
+        .map(|recipient| recipient.chat_id)
+        .collect();
+    crate::telegram::push(&card.title, telegram_text(card, kind, now), token, chats);
+}
+
+fn telegram_text(card: &crate::model::Card, kind: NagKind, now: DateTime<Utc>) -> String {
+    let (title, body) = nag_copy(card, kind, now);
+    let mut text = format!("{title}\n{body}");
+    let description = card.description.trim();
+    if !description.is_empty() {
+        let short: String = description.chars().take(300).collect();
+        text.push('\n');
+        text.push_str(&short);
+    }
+    text
+}
+
 fn nag_copy(card: &crate::model::Card, kind: NagKind, now: DateTime<Utc>) -> (String, String) {
     match kind {
         NagKind::Start => (
             "Пора начать".into(),
-            format!("«{}» · с {}", card.title, stamp(card.start_at.unwrap_or(now))),
+            format!(
+                "«{}» · с {}",
+                card.title,
+                stamp(card.start_at.unwrap_or(now))
+            ),
         ),
         NagKind::Deadline => (
             "Дедлайн".into(),
@@ -202,9 +234,7 @@ fn nag_copy(card: &crate::model::Card, kind: NagKind, now: DateTime<Utc>) -> (St
 }
 
 fn stamp(time: DateTime<Utc>) -> String {
-    time.with_timezone(&Local)
-        .format("%d.%m %H:%M")
-        .to_string()
+    time.with_timezone(&Local).format("%d.%m %H:%M").to_string()
 }
 
 fn late(from: DateTime<Utc>, now: DateTime<Utc>) -> String {

@@ -2,6 +2,7 @@ mod agent;
 mod model;
 mod schedule;
 mod store;
+mod telegram;
 
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
@@ -95,7 +96,10 @@ fn broadcast_cards(app: &tauri::AppHandle, cards: Vec<model::Card>) -> Vec<model
 
 #[tauri::command]
 fn get_settings(app: tauri::AppHandle) -> Result<Settings, String> {
-    let enabled = app.autolaunch().is_enabled().map_err(|err| err.to_string())?;
+    let enabled = app
+        .autolaunch()
+        .is_enabled()
+        .map_err(|err| err.to_string())?;
     app.state::<Store>().set_autostart_flag(enabled)
 }
 
@@ -108,6 +112,65 @@ fn set_autostart(app: tauri::AppHandle, enabled: bool) -> Result<Settings, Strin
 #[tauri::command]
 fn set_theme(store: tauri::State<Store>, theme: String) -> Result<Settings, String> {
     store.set_theme(&theme)
+}
+
+#[tauri::command]
+fn set_telegram_token(
+    app: tauri::AppHandle,
+    store: tauri::State<Store>,
+    token: String,
+) -> Result<Settings, String> {
+    let token = token.trim().to_string();
+    let bot = if token.is_empty() {
+        String::new()
+    } else {
+        telegram::bot_username(&token)?
+    };
+    let (settings, cards) = store.set_telegram_account(token, bot)?;
+    if let Some(cards) = cards {
+        broadcast_cards(&app, cards);
+    }
+    let _ = app.emit("telegram-changed", &settings);
+    Ok(settings)
+}
+
+#[tauri::command]
+fn set_telegram_always(
+    app: tauri::AppHandle,
+    store: tauri::State<Store>,
+    enabled: bool,
+) -> Result<Settings, String> {
+    let settings = store.set_telegram_always(enabled)?;
+    let _ = app.emit("telegram-changed", &settings);
+    Ok(settings)
+}
+
+#[tauri::command]
+fn remove_telegram_recipient(
+    app: tauri::AppHandle,
+    store: tauri::State<Store>,
+    id: String,
+) -> Result<Settings, String> {
+    let (settings, cards) = store.remove_recipient(&id)?;
+    broadcast_cards(&app, cards);
+    let _ = app.emit("telegram-changed", &settings);
+    Ok(settings)
+}
+
+#[tauri::command]
+fn prepare_telegram_invite(
+    app: tauri::AppHandle,
+    store: tauri::State<Store>,
+) -> Result<Settings, String> {
+    let token = store.settings().telegram_token;
+    if token.is_empty() {
+        return Err("Сначала сохраните токен бота".into());
+    }
+    let bot = telegram::bot_username(&token)?;
+    let url = format!("https://t.me/{bot}?start={}", telegram::invite_code());
+    let settings = store.set_telegram_invite(&bot, &url)?;
+    let _ = app.emit("telegram-changed", &settings);
+    Ok(settings)
 }
 
 /// Windows and AppImage can install the next release in place.
@@ -166,7 +229,8 @@ pub fn run() {
                 let _ = app.state::<Store>().set_autostart_flag(true);
             }
             setup_tray(app.handle())?;
-            agent::serve(app.handle()).map_err(|err| -> Box<dyn std::error::Error> { err.into() })?;
+            agent::serve(app.handle())
+                .map_err(|err| -> Box<dyn std::error::Error> { err.into() })?;
             let handle = app.handle().clone();
             app.notification()
                 .on_action(move |action| {
@@ -176,11 +240,20 @@ pub fn run() {
                 })
                 .map_err(|err| -> Box<dyn std::error::Error> { err.to_string().into() })?;
             let scheduler = app.handle().clone();
-            std::thread::spawn(move || loop {
-                if let Err(err) = schedule::tick(&scheduler) {
-                    eprintln!("планировщик: {err}");
+            std::thread::spawn(move || {
+                loop {
+                    if let Err(err) = schedule::tick(&scheduler) {
+                        eprintln!("планировщик: {err}");
+                    }
+                    std::thread::sleep(Duration::from_secs(20));
                 }
-                std::thread::sleep(Duration::from_secs(20));
+            });
+            let telegram_poll = app.handle().clone();
+            std::thread::spawn(move || {
+                loop {
+                    let _ = telegram::poll(&telegram_poll);
+                    std::thread::sleep(Duration::from_secs(4));
+                }
             });
             Ok(())
         })
@@ -197,6 +270,10 @@ pub fn run() {
             get_settings,
             set_autostart,
             set_theme,
+            set_telegram_token,
+            set_telegram_always,
+            remove_telegram_recipient,
+            prepare_telegram_invite,
             update_kind
         ])
         .run(tauri::generate_context!())

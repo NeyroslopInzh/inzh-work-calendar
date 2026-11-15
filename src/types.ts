@@ -9,6 +9,13 @@ export type Recurrence = {
   weekdays: number[];
 };
 
+export type TelegramRecipient = {
+  id: string;
+  chatId: number;
+  name: string;
+  username: string;
+};
+
 export type Card = {
   id: string;
   title: string;
@@ -22,6 +29,7 @@ export type Card = {
   createdAt: string;
   completedAt: string | null;
   recurrence: Recurrence | null;
+  recipientIds: string[];
 };
 
 export type CardInput = {
@@ -32,11 +40,17 @@ export type CardInput = {
   startAt: string | null;
   deadlineAt: string | null;
   recurrence: Recurrence | null;
+  recipientIds: string[];
 };
 
 export type Settings = {
   autostart: boolean;
   theme: "dark" | "light";
+  telegramToken: string;
+  telegramBot: string;
+  telegramInvite: string;
+  telegramAlways: boolean;
+  recipients: TelegramRecipient[];
 };
 
 export type Placement = "start" | "deadline" | "both";

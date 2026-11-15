@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState, type FormEvent } from "react";
 import { listen } from "@tauri-apps/api/event";
 import { getCurrentWindow } from "@tauri-apps/api/window";
+import { openUrl } from "@tauri-apps/plugin-opener";
 import {
   addColumn,
   deleteCard,
@@ -8,10 +9,14 @@ import {
   hideNag,
   listCards,
   listColumns,
+  prepareTelegramInvite,
   removeColumn,
+  removeTelegramRecipient,
   saveCard,
   setAutostart,
   setStatus,
+  setTelegramAlways,
+  setTelegramToken as saveTelegramToken,
   setTheme,
   snoozeCard,
 } from "./api";
@@ -35,7 +40,17 @@ import {
   showsOn,
   toLocalInput,
 } from "./time";
-import { DONE, TODO, WEEKDAYS, type Card, type CardInput, type Column, type Placement } from "./types";
+import {
+  DONE,
+  TODO,
+  WEEKDAYS,
+  type Card,
+  type CardInput,
+  type Column,
+  type Placement,
+  type Settings,
+  type TelegramRecipient,
+} from "./types";
 
 type Draft = {
   id: string | null;
@@ -48,6 +63,7 @@ type Draft = {
   repeatFrom: string;
   repeatUntil: string;
   weekdays: number[];
+  recipientIds: string[];
 };
 
 const FALLBACK_COLUMNS: Column[] = [
@@ -85,10 +101,11 @@ function draftFromCard(card: Card): Draft {
     repeatFrom: card.recurrence?.from ?? today,
     repeatUntil: card.recurrence?.until ?? today,
     weekdays: card.recurrence?.weekdays ?? [],
+    recipientIds: card.recipientIds ?? [],
   };
 }
 
-function blankDraft(): Draft {
+function blankDraft(recipientIds: string[]): Draft {
   const now = new Date();
   const weekday = now.getDay() === 0 ? 7 : now.getDay();
   return {
@@ -102,7 +119,12 @@ function blankDraft(): Draft {
     repeatFrom: dayKey(now),
     repeatUntil: dayKey(now),
     weekdays: [weekday],
+    recipientIds,
   };
+}
+
+function recipientTitle(recipient: TelegramRecipient): string {
+  return recipient.username ? `${recipient.name} (@${recipient.username})` : recipient.name;
 }
 
 function inputFromDraft(draft: Draft): CardInput {
@@ -113,10 +135,11 @@ function inputFromDraft(draft: Draft): CardInput {
     status: draft.status,
     startAt: fromLocalInput(draft.startAt),
     deadlineAt: fromLocalInput(draft.deadlineAt),
-    recurrence: draft.repeat
-      ? { from: draft.repeatFrom, until: draft.repeatUntil, weekdays: draft.weekdays }
-      : null,
-  };
+      recurrence: draft.repeat
+        ? { from: draft.repeatFrom, until: draft.repeatUntil, weekdays: draft.weekdays }
+        : null,
+      recipientIds: draft.recipientIds,
+    };
 }
 
 function windowLabel(): string {
@@ -150,13 +173,33 @@ function MainApp() {
   const [columns, setColumns] = useState<Column[]>(FALLBACK_COLUMNS);
   const [newStatus, setNewStatus] = useState("");
   const [theme, setThemeName] = useState<"dark" | "light">("dark");
+  const [telegramToken, setTelegramToken] = useState("");
+  const [telegramBot, setTelegramBot] = useState("");
+  const [telegramInvite, setTelegramInvite] = useState("");
+  const [telegramAlways, setTelegramAlwaysOn] = useState(false);
+  const [recipients, setRecipients] = useState<TelegramRecipient[]>([]);
   const [customSnooze, setCustomSnooze] = useState("30");
   const [offer, setOffer] = useState<UpdateOffer | null>(null);
   const [updating, setUpdating] = useState(false);
 
+  function rememberSettings(settings: Settings) {
+    setAutostartOn(settings.autostart);
+    setThemeName(settings.theme === "light" ? "light" : "dark");
+    setTelegramToken(settings.telegramToken);
+    setTelegramBot(settings.telegramBot);
+    setTelegramInvite(settings.telegramInvite);
+    setTelegramAlwaysOn(settings.telegramAlways);
+    setRecipients(settings.recipients);
+  }
+
+  function freshDraft(): Draft {
+    return blankDraft(telegramAlways ? recipients.map((item) => item.id) : []);
+  }
+
   useEffect(() => {
     let unlistenCards: (() => void) | undefined;
     let unlistenFocus: (() => void) | undefined;
+    let unlistenTelegram: (() => void) | undefined;
     let alive = true;
     const timer = window.setInterval(() => setNow(new Date()), 30000);
     void (async () => {
@@ -169,26 +212,29 @@ function MainApp() {
       try {
         const [settings, loadedColumns] = await Promise.all([getSettings(), listColumns()]);
         if (!alive) return;
-        setAutostartOn(settings.autostart);
-        setThemeName(settings.theme === "light" ? "light" : "dark");
+        rememberSettings(settings);
         if (loadedColumns.length > 0) setColumns(loadedColumns);
       } catch (loadError) {
         if (alive) setError(explain(loadError));
       }
       const cardsUn = await listen<Card[]>("cards-changed", (event) => setCards(event.payload));
       const focusUn = await listen<string>("focus-card", (event) => setFocusId(event.payload));
+      const telegramUn = await listen<Settings>("telegram-changed", (event) => rememberSettings(event.payload));
       if (!alive) {
         cardsUn();
         focusUn();
+        telegramUn();
         return;
       }
       unlistenCards = cardsUn;
       unlistenFocus = focusUn;
+      unlistenTelegram = telegramUn;
     })();
     return () => {
       alive = false;
       unlistenCards?.();
       unlistenFocus?.();
+      unlistenTelegram?.();
       window.clearInterval(timer);
     };
   }, []);
@@ -348,6 +394,7 @@ function MainApp() {
       description: card.description,
       status: card.status,
       recurrence: card.recurrence,
+      recipientIds: card.recipientIds,
       startAt:
         payload.kind === "deadline"
           ? card.startAt
@@ -400,7 +447,7 @@ function MainApp() {
               <MoonIcon />
             </button>
           </div>
-          <button type="button" className="solid" onClick={() => setDraft(blankDraft())}>
+          <button type="button" className="solid" onClick={() => setDraft(freshDraft())}>
             Новая задача
           </button>
         </div>
@@ -497,7 +544,7 @@ function MainApp() {
                 <h2>
                   {selected.toLocaleDateString("ru-RU", { day: "numeric", month: "long" })}
                 </h2>
-                <button type="button" className="tiny" onClick={() => setDraft(blankDraft())}>
+                <button type="button" className="tiny" onClick={() => setDraft(freshDraft())}>
                   Добавить
                 </button>
               </div>
@@ -603,6 +650,38 @@ function MainApp() {
             columns={columns}
             newStatus={newStatus}
             onNewStatus={setNewStatus}
+            telegramToken={telegramToken}
+            telegramBot={telegramBot}
+            telegramInvite={telegramInvite}
+            telegramAlways={telegramAlways}
+            recipients={recipients}
+            onFail={(telegramError) => setError(explain(telegramError))}
+            onTelegramToken={async (token) => {
+              rememberSettings(await saveTelegramToken(token));
+              setError("");
+            }}
+            onTelegramAlways={(enabled) => {
+              setTelegramAlwaysOn(enabled);
+              void setTelegramAlways(enabled)
+                .then((settings) => rememberSettings(settings))
+                .catch((alwaysError) => {
+                  setTelegramAlwaysOn(!enabled);
+                  setError(explain(alwaysError));
+                });
+            }}
+            onInvite={async () => {
+              rememberSettings(await prepareTelegramInvite());
+              setError("");
+            }}
+            onRemoveRecipient={(id) => {
+              if (!window.confirm("Убрать получателя из списка? Задачи больше не будут писать ему в Телеграм.")) return;
+              void removeTelegramRecipient(id)
+                .then((settings) => {
+                  rememberSettings(settings);
+                  setError("");
+                })
+                .catch((removeError) => setError(explain(removeError)));
+            }}
             onAutostart={(enabled) => {
               setAutostartOn(enabled);
               void setAutostart(enabled)
@@ -651,6 +730,7 @@ function MainApp() {
         <TaskView
           card={cards.find((card) => card.id === viewId) as Card}
           statusTitle={columnTitle(cards.find((card) => card.id === viewId)?.status ?? "")}
+          recipients={recipients}
           onClose={() => setViewId(null)}
           onEdit={() => {
             const card = cards.find((item) => item.id === viewId);
@@ -750,6 +830,32 @@ function MainApp() {
                 </div>
               </>
             )}
+            <div className="field">
+              Получатели в Телеграме
+              {recipients.length === 0 ? (
+                <p className="hint">Пока никого нет. Человек появляется в настройках, когда сам напишет боту.</p>
+              ) : (
+                <div className="recipients">
+                  {recipients.map((recipient) => (
+                    <label key={recipient.id} className="check">
+                      <input
+                        type="checkbox"
+                        checked={draft.recipientIds.includes(recipient.id)}
+                        onChange={(event) =>
+                          setDraft({
+                            ...draft,
+                            recipientIds: event.target.checked
+                              ? [...draft.recipientIds, recipient.id]
+                              : draft.recipientIds.filter((id) => id !== recipient.id),
+                          })
+                        }
+                      />
+                      {recipientTitle(recipient)}
+                    </label>
+                  ))}
+                </div>
+              )}
+            </div>
             <label>
               Статус
               <select
@@ -857,6 +963,16 @@ function SettingsView({
   onAutostart,
   onAdd,
   onRemove,
+  telegramToken,
+  telegramBot,
+  telegramInvite,
+  telegramAlways,
+  recipients,
+  onFail,
+  onTelegramToken,
+  onTelegramAlways,
+  onInvite,
+  onRemoveRecipient,
 }: {
   autostart: boolean;
   offer: UpdateOffer | null;
@@ -868,7 +984,38 @@ function SettingsView({
   onAutostart: (enabled: boolean) => void;
   onAdd: () => void;
   onRemove: (id: string) => void;
+  telegramToken: string;
+  telegramBot: string;
+  telegramInvite: string;
+  telegramAlways: boolean;
+  recipients: TelegramRecipient[];
+  onFail: (error: unknown) => void;
+  onTelegramToken: (token: string) => Promise<void>;
+  onTelegramAlways: (enabled: boolean) => void;
+  onInvite: () => Promise<void>;
+  onRemoveRecipient: (id: string) => void;
 }) {
+  const [tokenDraft, setTokenDraft] = useState(telegramToken);
+  const [tokenFocused, setTokenFocused] = useState(false);
+  const [inviteBusy, setInviteBusy] = useState(false);
+  const [copied, setCopied] = useState(false);
+  useEffect(() => {
+    if (!tokenFocused) setTokenDraft(telegramToken);
+  }, [telegramToken, tokenFocused]);
+
+  async function addRecipient() {
+    setInviteBusy(true);
+    try {
+      const next = tokenDraft.trim();
+      if (next !== telegramToken) await onTelegramToken(next);
+      await onInvite();
+    } catch (error) {
+      onFail(error);
+    } finally {
+      setInviteBusy(false);
+    }
+  }
+
   return (
     <section className="settings">
       <h2>Настройки</h2>
@@ -905,6 +1052,78 @@ function SettingsView({
         >
           <span />
         </button>
+      </article>
+      <article className="setting column-setting">
+        <div>
+          <strong>Телеграм</strong>
+          <p>
+            Напоминание уходит в бота вместе с окном на компьютере. В список попадает только тот, кто сам открыл бота и нажал Start. Токен выдаёт @BotFather. Другой токен очищает список.
+          </p>
+        </div>
+        <label className="stack">
+          Токен бота
+          <input
+            className="line-input"
+            value={tokenDraft}
+            spellCheck={false}
+            autoComplete="off"
+            onFocus={() => setTokenFocused(true)}
+            onBlur={() => {
+              setTokenFocused(false);
+              const next = tokenDraft.trim();
+              if (next !== telegramToken) void onTelegramToken(next).catch(onFail);
+            }}
+            onChange={(event) => setTokenDraft(event.target.value)}
+          />
+        </label>
+        <p className="hint">{telegramBot ? `Бот @${telegramBot}` : "Имя бота появится после сохранения токена."}</p>
+        <div className="list">
+          {recipients.length === 0 && <p className="empty">Пока никого нет.</p>}
+          {recipients.map((recipient) => (
+            <div key={recipient.id} className="status-row">
+              <strong>{recipientTitle(recipient)}</strong>
+              <button type="button" className="tiny late" onClick={() => onRemoveRecipient(recipient.id)}>
+                Убрать
+              </button>
+            </div>
+          ))}
+        </div>
+        <label className="check">
+          <input type="checkbox" checked={telegramAlways} onChange={(event) => onTelegramAlways(event.target.checked)} />
+          Всегда отправлять
+        </label>
+        <p className="hint">Новая задача сразу получает всех из списка. В самой задаче получателей можно добавить или убрать.</p>
+        <div className="actions">
+          <button type="button" className="solid" disabled={inviteBusy} onClick={() => void addRecipient()}>
+            {inviteBusy ? "Готовим ссылку…" : "Добавить получателя"}
+          </button>
+        </div>
+        {telegramInvite && (
+          <div className="invite-row">
+            <input className="line-input" readOnly value={telegramInvite} onFocus={(event) => event.target.select()} />
+            <button
+              type="button"
+              className="tiny"
+              onClick={() => {
+                void navigator.clipboard.writeText(telegramInvite).then(
+                  () => {
+                    setCopied(true);
+                    window.setTimeout(() => setCopied(false), 1500);
+                  },
+                  () => onFail("Не удалось скопировать ссылку"),
+                );
+              }}
+            >
+              {copied ? "Скопировано" : "Скопировать"}
+            </button>
+            <button type="button" className="tiny" onClick={() => void openUrl(telegramInvite).catch(onFail)}>
+              Открыть
+            </button>
+          </div>
+        )}
+        {telegramInvite && (
+          <p className="hint">Ссылку открывает сам получатель и нажимает Start. Он появится в списке, когда приложение увидит сообщение.</p>
+        )}
       </article>
       <article className="setting column-setting">
         <div>
@@ -1074,14 +1293,20 @@ function DueStrip({
 function TaskView({
   card,
   statusTitle,
+  recipients,
   onClose,
   onEdit,
 }: {
   card: Card;
   statusTitle: string;
+  recipients: TelegramRecipient[];
   onClose: () => void;
   onEdit: () => void;
 }) {
+  const names = card.recipientIds
+    .map((id) => recipients.find((recipient) => recipient.id === id))
+    .filter((recipient): recipient is TelegramRecipient => Boolean(recipient))
+    .map(recipientTitle);
   return (
     <div className="shade" onMouseDown={onClose}>
       <article className="viewer" onMouseDown={(event) => event.stopPropagation()}>
@@ -1089,6 +1314,7 @@ function TaskView({
         <p className="meta">{statusTitle}</p>
         {card.description.trim() ? <p className="preview">{card.description}</p> : <p className="empty">Без описания</p>}
         <p className="meta">{whenLine(card, new Date())}</p>
+        <p className="meta">{names.length ? `Телеграм: ${names.join(", ")}` : "Телеграм: никому"}</p>
         {card.recurrence && (
           <p className="meta">
             Повтор {card.recurrence.from} — {card.recurrence.until},{" "}
@@ -1158,5 +1384,6 @@ function inputAsCard(draft: Draft): Card {
     createdAt: "",
     completedAt: null,
     recurrence: null,
+    recipientIds: draft.recipientIds,
   };
 }

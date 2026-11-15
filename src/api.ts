@@ -49,6 +49,22 @@ export function setTheme(theme: "dark" | "light"): Promise<Settings> {
   return invoke("set_theme", { theme });
 }
 
+export function setTelegramToken(token: string): Promise<Settings> {
+  return invoke("set_telegram_token", { token });
+}
+
+export function setTelegramAlways(enabled: boolean): Promise<Settings> {
+  return invoke("set_telegram_always", { enabled });
+}
+
+export function removeTelegramRecipient(id: string): Promise<Settings> {
+  return invoke("remove_telegram_recipient", { id });
+}
+
+export function prepareTelegramInvite(): Promise<Settings> {
+  return invoke("prepare_telegram_invite");
+}
+
 export type UpdateKind = "windows" | "appimage" | "browser";
 
 export function updateKind(): Promise<UpdateKind> {

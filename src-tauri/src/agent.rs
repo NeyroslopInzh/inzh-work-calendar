@@ -5,7 +5,7 @@ use std::sync::Mutex;
 
 use chrono::{DateTime, Local, NaiveDateTime, TimeZone, Utc};
 use serde::Deserialize;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use tauri::{AppHandle, Emitter, Manager};
 use tiny_http::{Header, Method, Request, Response, Server, StatusCode};
 use uuid::Uuid;
@@ -87,7 +87,11 @@ fn load_token(dir: &Path) -> String {
 
 fn dispatch(app: &AppHandle, token: &str, mut request: Request) -> Result<(), String> {
     if !authorized(&request, token) {
-        return respond(request, 401, json!({ "error": "нужен токен из endpoint.json" }));
+        return respond(
+            request,
+            401,
+            json!({ "error": "нужен токен из endpoint.json" }),
+        );
     }
 
     let path = request.url().split('?').next().unwrap_or("").to_string();
@@ -99,7 +103,11 @@ fn dispatch(app: &AppHandle, token: &str, mut request: Request) -> Result<(), St
         .read_to_string(&mut body)
         .map_err(|err| err.to_string())?;
     if body.len() >= 64 * 1024 {
-        return respond(request, 413, json!({ "error": "слишком большое тело запроса" }));
+        return respond(
+            request,
+            413,
+            json!({ "error": "слишком большое тело запроса" }),
+        );
     }
 
     let result = route(app, &method, &path, &body);
@@ -248,6 +256,8 @@ struct Incoming {
     status: Option<String>,
     #[serde(default)]
     recurrence: Option<Recurrence>,
+    #[serde(default)]
+    recipient_ids: Option<Vec<String>>,
 }
 
 fn incoming_to_input(body: &str, id: Option<String>) -> Result<CardInput, String> {
@@ -260,6 +270,7 @@ fn incoming_to_input(body: &str, id: Option<String>) -> Result<CardInput, String
         start_at: optional_when(incoming.start_at, "startAt")?,
         deadline_at: optional_when(incoming.deadline_at, "deadlineAt")?,
         recurrence: incoming.recurrence,
+        recipient_ids: incoming.recipient_ids,
     })
 }
 
@@ -278,7 +289,9 @@ fn patch_input(card: &Card, body: &str) -> Result<CardInput, String> {
     };
     let status = match value.get("status") {
         None => card.status.clone(),
-        Some(status) => serde_json::from_value(status.clone()).map_err(|_| "неизвестный статус".to_string())?,
+        Some(status) => {
+            serde_json::from_value(status.clone()).map_err(|_| "неизвестный статус".to_string())?
+        }
     };
     Ok(CardInput {
         id: Some(card.id.clone()),
@@ -290,14 +303,23 @@ fn patch_input(card: &Card, body: &str) -> Result<CardInput, String> {
         recurrence: match value.get("recurrence") {
             None => card.recurrence.clone(),
             Some(Value::Null) => None,
-            Some(rule) => Some(
-                serde_json::from_value(rule.clone()).map_err(|err| err.to_string())?,
-            ),
+            Some(rule) => {
+                Some(serde_json::from_value(rule.clone()).map_err(|err| err.to_string())?)
+            }
+        },
+        recipient_ids: match value.get("recipientIds") {
+            None => None,
+            Some(Value::Null) => Some(Vec::new()),
+            Some(ids) => Some(serde_json::from_value(ids.clone()).map_err(|err| err.to_string())?),
         },
     })
 }
 
-fn take_time(value: &Value, key: &str, current: Option<DateTime<Utc>>) -> Result<Option<DateTime<Utc>>, String> {
+fn take_time(
+    value: &Value,
+    key: &str,
+    current: Option<DateTime<Utc>>,
+) -> Result<Option<DateTime<Utc>>, String> {
     match value.get(key) {
         None => Ok(current),
         Some(Value::Null) => Ok(None),

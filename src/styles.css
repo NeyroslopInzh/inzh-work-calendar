@@ -516,6 +516,11 @@ button:focus-visible, input:focus-visible, select:focus-visible {
 }
 .status-add { display: flex; gap: 8px; }
 .status-add input { flex: 1; background: var(--bg); border: 1px solid var(--line); border-radius: 10px; padding: 10px 12px; color: var(--text); }
+.setting label.stack { display: flex; flex-direction: column; gap: 6px; color: var(--muted); font-size: 13px; }
+.line-input { width: 100%; background: var(--bg); border: 1px solid var(--line); border-radius: 10px; padding: 10px 12px; color: var(--text); }
+.invite-row { display: flex; gap: 8px; align-items: center; }
+.invite-row .line-input { min-width: 0; }
+.recipients { display: flex; flex-direction: column; gap: 6px; }
 
 .tumbler {
   width: 48px;

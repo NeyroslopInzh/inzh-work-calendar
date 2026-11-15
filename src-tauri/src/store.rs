@@ -7,9 +7,9 @@ use tauri::{AppHandle, Manager};
 use uuid::Uuid;
 
 use crate::model::{
-    checked_recurrence, mark_notified, nag_kind, needs_attention, normalize_columns, Card, CardInput,
-    Column,
-    NagKind, Settings, DONE_ID, MAX_SNOOZE_MINUTES, TODO_ID,
+    Card, CardInput, Column, DONE_ID, MAX_SNOOZE_MINUTES, NagKind, Settings, TODO_ID,
+    TelegramContact, checked_recurrence, default_recipient_ids, mark_notified, merge_recipients,
+    nag_kind, needs_attention, normalize_columns, recipient_ids_for_save,
 };
 
 pub struct Store {
@@ -137,6 +137,94 @@ impl Store {
         Ok(settings.clone())
     }
 
+    pub fn set_telegram_always(&self, enabled: bool) -> Result<Settings, String> {
+        let mut settings = lock(&self.settings);
+        settings.telegram_always = enabled;
+        write_json(&self.settings_path, &*settings)?;
+        Ok(settings.clone())
+    }
+
+    /// A different token belongs to another bot, so the old chat ids stop working.
+    pub fn set_telegram_account(
+        &self,
+        token: String,
+        bot: String,
+    ) -> Result<(Settings, Option<Vec<Card>>), String> {
+        let token_changed = lock(&self.settings).telegram_token != token;
+        let settings = {
+            let mut settings = lock(&self.settings);
+            settings.telegram_token = token;
+            settings.telegram_bot = bot;
+            if token_changed {
+                settings.recipients.clear();
+                settings.telegram_offset = 0;
+                settings.telegram_invite.clear();
+            }
+            write_json(&self.settings_path, &*settings)?;
+            settings.clone()
+        };
+        if !token_changed {
+            return Ok((settings, None));
+        }
+        let cards = self.update_cards(|cards| {
+            for card in cards.iter_mut() {
+                card.recipient_ids.clear();
+            }
+            Ok(())
+        })?;
+        Ok((settings, Some(cards)))
+    }
+
+    pub fn set_telegram_invite(&self, bot: &str, url: &str) -> Result<Settings, String> {
+        let mut settings = lock(&self.settings);
+        settings.telegram_bot = bot.to_string();
+        settings.telegram_invite = url.to_string();
+        write_json(&self.settings_path, &*settings)?;
+        Ok(settings.clone())
+    }
+
+    pub fn remove_recipient(&self, id: &str) -> Result<(Settings, Vec<Card>), String> {
+        let settings = {
+            let mut settings = lock(&self.settings);
+            if !settings
+                .recipients
+                .iter()
+                .any(|recipient| recipient.id == id)
+            {
+                return Err("Получатель не найден".into());
+            }
+            settings.recipients.retain(|recipient| recipient.id != id);
+            write_json(&self.settings_path, &*settings)?;
+            settings.clone()
+        };
+        let cards = self.update_cards(|cards| {
+            for card in cards.iter_mut() {
+                card.recipient_ids.retain(|item| item != id);
+            }
+            Ok(())
+        })?;
+        Ok((settings, cards))
+    }
+
+    pub fn apply_telegram_contacts(
+        &self,
+        token: &str,
+        contacts: Vec<TelegramContact>,
+        offset: i64,
+    ) -> Result<bool, String> {
+        let mut settings = lock(&self.settings);
+        if settings.telegram_token != token || offset < settings.telegram_offset {
+            return Ok(false);
+        }
+        let changed = merge_recipients(&mut settings.recipients, &contacts);
+        let moved = settings.telegram_offset != offset;
+        settings.telegram_offset = offset;
+        if changed || moved {
+            write_json(&self.settings_path, &*settings)?;
+        }
+        Ok(changed)
+    }
+
     pub fn save_card(&self, input: CardInput) -> Result<Vec<Card>, String> {
         let now = Utc::now();
         let title = input.title.trim();
@@ -150,7 +238,11 @@ impl Store {
         if description.chars().count() > 4000 {
             return Err("Описание длиннее 4000 символов".into());
         }
-        if !self.columns().iter().any(|column| column.id == input.status) {
+        if !self
+            .columns()
+            .iter()
+            .any(|column| column.id == input.status)
+        {
             return Err("Неизвестный статус".into());
         }
         let recurrence = match &input.recurrence {
@@ -162,6 +254,16 @@ impl Store {
                 return Err("Дедлайн раньше начала".into());
             }
         }
+        let (known, defaults) = {
+            let settings = lock(&self.settings);
+            let known: Vec<String> = settings
+                .recipients
+                .iter()
+                .map(|recipient| recipient.id.clone())
+                .collect();
+            let defaults = default_recipient_ids(&settings);
+            (known, defaults)
+        };
 
         self.update_cards(|cards| {
             if let Some(id) = input.id.as_ref() {
@@ -181,6 +283,13 @@ impl Store {
                 card.start_at = input.start_at;
                 card.deadline_at = input.deadline_at;
                 card.recurrence = recurrence.clone();
+                let ids = recipient_ids_for_save(
+                    input.recipient_ids.as_deref(),
+                    Some(&card.recipient_ids),
+                    &known,
+                    &defaults,
+                );
+                card.recipient_ids = ids;
                 apply_completion(card, now);
             } else {
                 let mut card = Card {
@@ -196,6 +305,12 @@ impl Store {
                     created_at: now,
                     completed_at: None,
                     recurrence: recurrence.clone(),
+                    recipient_ids: recipient_ids_for_save(
+                        input.recipient_ids.as_deref(),
+                        None,
+                        &known,
+                        &defaults,
+                    ),
                 };
                 apply_completion(&mut card, now);
                 cards.push(card);
@@ -282,7 +397,10 @@ impl Store {
         Ok(())
     }
 
-    fn update_cards(&self, change: impl FnOnce(&mut Vec<Card>) -> Result<(), String>) -> Result<Vec<Card>, String> {
+    fn update_cards(
+        &self,
+        change: impl FnOnce(&mut Vec<Card>) -> Result<(), String>,
+    ) -> Result<Vec<Card>, String> {
         let mut guard = lock(&self.cards);
         let mut next = guard.clone();
         change(&mut next)?;
