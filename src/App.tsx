@@ -254,7 +254,7 @@ function MainApp() {
       }
     }
     void look();
-    const timer = window.setInterval(() => void look(), 6 * 60 * 60 * 1000);
+    const timer = window.setInterval(() => void look(), 15 * 60 * 1000);
     return () => {
       alive = false;
       window.clearInterval(timer);

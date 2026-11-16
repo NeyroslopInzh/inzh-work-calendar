@@ -168,8 +168,8 @@ chmod +x inzh.work.calendar_*_amd64.AppImage
 ## Сборка релиза
 
 ```bash
-git tag v0.2.5
-git push origin v0.2.5
+git tag v0.2.6
+git push origin v0.2.6
 ```
 
 GitHub Actions соберёт Windows (NSIS) и Linux (`.deb`, AppImage). Workflow — `.github/workflows/release.yml`.
