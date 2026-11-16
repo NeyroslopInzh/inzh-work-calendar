@@ -54,6 +54,20 @@ fn add_column(store: tauri::State<Store>, title: String) -> Result<Vec<Column>, 
 }
 
 #[tauri::command]
+fn move_column(
+    store: tauri::State<Store>,
+    id: String,
+    direction: String,
+) -> Result<Vec<Column>, String> {
+    let up = match direction.as_str() {
+        "up" => true,
+        "down" => false,
+        _ => return Err("Непонятное направление".into()),
+    };
+    store.move_column(&id, up)
+}
+
+#[tauri::command]
 fn remove_column(
     app: tauri::AppHandle,
     store: tauri::State<Store>,
@@ -264,6 +278,7 @@ pub fn run() {
             set_status,
             list_columns,
             add_column,
+            move_column,
             remove_column,
             delete_card,
             snooze_card,

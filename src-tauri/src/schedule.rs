@@ -44,6 +44,12 @@ pub fn handle_action(app: &AppHandle, action_id: &str) -> Result<(), String> {
             let _ = app.emit("focus-card", id);
             cards
         }
+        ToastAction::Work(id) => {
+            let cards = store.set_status(&id, crate::model::DOING_ID)?;
+            reveal(app);
+            let _ = app.emit("focus-card", id);
+            cards
+        }
         ToastAction::Snooze { id, minutes } => {
             let cards = store.snooze(&id, minutes)?;
             reveal(app);
@@ -59,10 +65,16 @@ pub fn handle_action(app: &AppHandle, action_id: &str) -> Result<(), String> {
 enum ToastAction {
     Open,
     Done(String),
+    Work(String),
     Snooze { id: String, minutes: u32 },
 }
 
 fn interpret(action_id: &str) -> ToastAction {
+    if let Some(id) = action_id.strip_prefix("work:") {
+        if !id.is_empty() {
+            return ToastAction::Work(id.to_string());
+        }
+    }
     if let Some(id) = action_id.strip_prefix("done:") {
         if !id.is_empty() {
             return ToastAction::Done(id.to_string());
@@ -86,7 +98,7 @@ fn interpret(action_id: &str) -> ToastAction {
 fn show_nag(app: &AppHandle, card: &crate::model::Card, kind: NagKind) -> Result<(), String> {
     let (title, body) = nag_copy(card, kind, Utc::now());
     let buttons: Vec<(&str, String)> = match kind {
-        NagKind::Start => vec![("Готово", format!("done:{}", card.id))],
+        NagKind::Start => vec![("Взять в работу", format!("work:{}", card.id))],
         NagKind::Deadline => vec![
             ("Готово", format!("done:{}", card.id)),
             ("15 мин", format!("snooze:15:{}", card.id)),

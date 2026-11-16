@@ -7,7 +7,7 @@ use tauri::{AppHandle, Manager};
 use uuid::Uuid;
 
 use crate::model::{
-    Card, CardInput, Column, DONE_ID, MAX_SNOOZE_MINUTES, NagKind, Settings, TODO_ID,
+    Card, CardInput, Column, DOING_ID, DONE_ID, MAX_SNOOZE_MINUTES, NagKind, Settings, TODO_ID,
     TelegramContact, checked_recurrence, default_recipient_ids, mark_notified, merge_recipients,
     nag_kind, needs_attention, normalize_columns, recipient_ids_for_save,
 };
@@ -96,8 +96,8 @@ impl Store {
     }
 
     pub fn remove_column(&self, id: &str) -> Result<crate::model::ColumnChange, String> {
-        if id == TODO_ID || id == DONE_ID {
-            return Err("«К выполнению» и «Готово» нельзя убрать".into());
+        if id == TODO_ID || id == DOING_ID || id == DONE_ID {
+            return Err("«К выполнению», «В работе» и «Готово» нельзя убрать".into());
         }
         if !self.columns().iter().any(|column| column.id == id) {
             return Err("Статус не найден".into());
@@ -118,6 +118,38 @@ impl Store {
             columns: settings.columns.clone(),
             cards,
         })
+    }
+
+    pub fn move_column(&self, id: &str, up: bool) -> Result<Vec<Column>, String> {
+        if id == TODO_ID || id == DOING_ID || id == DONE_ID {
+            return Err("Этот статус нельзя двигать".into());
+        }
+        let mut settings = lock(&self.settings);
+        let Some(index) = settings.columns.iter().position(|column| column.id == id) else {
+            return Err("Статус не найден".into());
+        };
+        let neighbor = if up {
+            index.checked_sub(1)
+        } else {
+            index.checked_add(1)
+        };
+        let Some(neighbor) = neighbor.filter(|at| *at < settings.columns.len()) else {
+            return Err(if up {
+                "Выше «К выполнению» статус не поставить".into()
+            } else {
+                "Ниже «Готово» статус не поставить".into()
+            });
+        };
+        if settings.columns[neighbor].id == TODO_ID {
+            return Err("Выше «К выполнению» статус не поставить".into());
+        }
+        if settings.columns[neighbor].id == DONE_ID {
+            return Err("Ниже «Готово» статус не поставить".into());
+        }
+        settings.columns.swap(index, neighbor);
+        settings.columns = normalize_columns(std::mem::take(&mut settings.columns));
+        write_json(&self.settings_path, &*settings)?;
+        Ok(settings.columns.clone())
     }
 
     pub fn set_theme(&self, theme: &str) -> Result<Settings, String> {
@@ -379,16 +411,18 @@ impl Store {
     }
 
     pub fn due(&self, now: DateTime<Utc>) -> Vec<(Card, NagKind)> {
+        let columns = self.columns();
         lock(&self.cards)
             .iter()
-            .filter_map(|card| nag_kind(card, now).map(|kind| (card.clone(), kind)))
+            .filter_map(|card| nag_kind(&columns, card, now).map(|kind| (card.clone(), kind)))
             .collect()
     }
 
     pub fn attention(&self, now: DateTime<Utc>) -> Vec<Card> {
+        let columns = self.columns();
         lock(&self.cards)
             .iter()
-            .filter(|card| needs_attention(card, now))
+            .filter(|card| needs_attention(&columns, card, now))
             .cloned()
             .collect()
     }

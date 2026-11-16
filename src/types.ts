@@ -56,6 +56,7 @@ export type Settings = {
 export type Placement = "start" | "deadline" | "both";
 
 export const TODO = "todo";
+export const DOING = "doing";
 export const DONE = "done";
 
 export const WEEKDAYS: { id: number; label: string }[] = [

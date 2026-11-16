@@ -109,16 +109,23 @@ export function showsOn(card: Card, day: Date): boolean {
   return rule.weekdays.includes(weekday);
 }
 
-export function isStartDue(card: Card, now: Date): boolean {
-  if (card.status !== "todo" || !card.startAt) return false;
+export function awaitsStart(status: string, columns: { id: string }[]): boolean {
+  const doingAt = columns.findIndex((column) => column.id === "doing");
+  const at = columns.findIndex((column) => column.id === status);
+  if (doingAt < 0 || at < 0) return status === "todo";
+  return at < doingAt;
+}
+
+export function isStartDue(card: Card, columns: { id: string }[], now: Date): boolean {
+  if (!awaitsStart(card.status, columns) || !card.startAt) return false;
   if (new Date(card.startAt).getTime() > now.getTime()) return false;
   if (card.deadlineAt && new Date(card.deadlineAt).getTime() <= now.getTime()) return false;
   return true;
 }
 
-export function isNagging(card: Card, now: Date): boolean {
+export function isNagging(card: Card, columns: { id: string }[], now: Date): boolean {
   if (isSnoozed(card, now)) return false;
-  return isDeadlineDue(card, now) || isStartDue(card, now);
+  return isDeadlineDue(card, now) || isStartDue(card, columns, now);
 }
 
 export function agendaStamp(card: Card, day: Date): string | null {

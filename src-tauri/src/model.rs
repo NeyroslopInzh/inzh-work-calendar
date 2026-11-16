@@ -4,6 +4,7 @@ use serde::{Deserialize, Serialize};
 pub const NAG_GAP: Duration = Duration::minutes(10);
 pub const MAX_SNOOZE_MINUTES: u32 = 24 * 60;
 pub const TODO_ID: &str = "todo";
+pub const DOING_ID: &str = "doing";
 pub const DONE_ID: &str = "done";
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -24,7 +25,7 @@ fn default_columns() -> Vec<Column> {
             title: "К выполнению".into(),
         },
         Column {
-            id: "doing".into(),
+            id: DOING_ID.into(),
             title: "В работе".into(),
         },
         Column {
@@ -35,32 +36,62 @@ fn default_columns() -> Vec<Column> {
 }
 
 pub fn normalize_columns(columns: Vec<Column>) -> Vec<Column> {
-    let mut middle = Vec::new();
+    let mut before_doing = Vec::new();
+    let mut after_doing = Vec::new();
+    let mut seen_doing = false;
     for column in columns {
         if column.id == TODO_ID || column.id == DONE_ID || column.title.trim().is_empty() {
             continue;
         }
-        if middle
+        if column.id == DOING_ID {
+            seen_doing = true;
+            continue;
+        }
+        let bucket = if seen_doing {
+            &mut after_doing
+        } else {
+            &mut before_doing
+        };
+        if bucket
             .iter()
             .any(|existing: &Column| existing.id == column.id)
         {
             continue;
         }
-        middle.push(Column {
+        bucket.push(Column {
             id: column.id,
             title: column.title.trim().to_string(),
         });
+    }
+    if !seen_doing {
+        after_doing.splice(0..0, before_doing.drain(..));
     }
     let mut columns = vec![Column {
         id: TODO_ID.into(),
         title: "К выполнению".into(),
     }];
-    columns.extend(middle);
+    columns.extend(before_doing);
+    columns.push(Column {
+        id: DOING_ID.into(),
+        title: "В работе".into(),
+    });
+    columns.extend(after_doing);
     columns.push(Column {
         id: DONE_ID.into(),
         title: "Готово".into(),
     });
     columns
+}
+
+/// Start reminders belong to every status strictly above «В работе».
+pub fn awaits_start(columns: &[Column], status: &str) -> bool {
+    let Some(doing_at) = columns.iter().position(|column| column.id == DOING_ID) else {
+        return status == TODO_ID;
+    };
+    columns
+        .iter()
+        .position(|column| column.id == status)
+        .is_some_and(|at| at < doing_at)
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -273,7 +304,7 @@ pub fn merge_recipients(
 /// What should fire right now.
 /// A passed deadline replaces the start reminder.
 /// Snooze silences the whole card. A fresh notification waits ten minutes after the previous one.
-pub fn nag_kind(card: &Card, now: DateTime<Utc>) -> Option<NagKind> {
+pub fn nag_kind(columns: &[Column], card: &Card, now: DateTime<Utc>) -> Option<NagKind> {
     if card.status == DONE_ID {
         return None;
     }
@@ -287,7 +318,7 @@ pub fn nag_kind(card: &Card, now: DateTime<Utc>) -> Option<NagKind> {
             return ready(card.last_deadline_notified_at, now).then_some(NagKind::Deadline);
         }
     }
-    if card.status == TODO_ID {
+    if awaits_start(columns, &card.status) {
         if let Some(start) = card.start_at {
             if now >= start {
                 return ready(card.last_start_notified_at, now).then_some(NagKind::Start);
@@ -299,7 +330,7 @@ pub fn nag_kind(card: &Card, now: DateTime<Utc>) -> Option<NagKind> {
 
 /// The popup and the in-app strip stay up while this is true.
 /// Snooze silences the card. The ten-minute gap only spaces out toasts, it does not clear the popup.
-pub fn needs_attention(card: &Card, now: DateTime<Utc>) -> bool {
+pub fn needs_attention(columns: &[Column], card: &Card, now: DateTime<Utc>) -> bool {
     if card.status == DONE_ID {
         return false;
     }
@@ -309,7 +340,7 @@ pub fn needs_attention(card: &Card, now: DateTime<Utc>) -> bool {
     if card.deadline_at.is_some_and(|deadline| now >= deadline) {
         return true;
     }
-    card.status == TODO_ID && card.start_at.is_some_and(|start| now >= start)
+    awaits_start(columns, &card.status) && card.start_at.is_some_and(|start| now >= start)
 }
 
 fn ready(last: Option<DateTime<Utc>>, now: DateTime<Utc>) -> bool {
@@ -343,6 +374,14 @@ mod tests {
         Utc.with_ymd_and_hms(2026, 11, 13, hour, minute, 0).unwrap()
     }
 
+    fn kind(card: &Card, now: DateTime<Utc>) -> Option<NagKind> {
+        nag_kind(&default_columns(), card, now)
+    }
+
+    fn attention(card: &Card, now: DateTime<Utc>) -> bool {
+        needs_attention(&default_columns(), card, now)
+    }
+
     fn card() -> Card {
         Card {
             id: "1".into(),
@@ -365,19 +404,19 @@ mod tests {
     fn stays_quiet_before_the_start() {
         let mut item = card();
         item.deadline_at = None;
-        assert_eq!(nag_kind(&item, at(8, 59)), None);
+        assert_eq!(kind(&item, at(8, 59)), None);
     }
 
     #[test]
     fn start_nags_until_done_and_then_waits() {
         let mut item = card();
         item.deadline_at = None;
-        assert_eq!(nag_kind(&item, at(9, 0)), Some(NagKind::Start));
+        assert_eq!(kind(&item, at(9, 0)), Some(NagKind::Start));
         mark_notified(&mut item, NagKind::Start, at(9, 0));
-        assert_eq!(nag_kind(&item, at(9, 9)), None);
-        assert_eq!(nag_kind(&item, at(9, 10)), Some(NagKind::Start));
+        assert_eq!(kind(&item, at(9, 9)), None);
+        assert_eq!(kind(&item, at(9, 10)), Some(NagKind::Start));
         item.status = DONE_ID.into();
-        assert_eq!(nag_kind(&item, at(12, 0)), None);
+        assert_eq!(kind(&item, at(12, 0)), None);
     }
 
     #[test]
@@ -385,35 +424,35 @@ mod tests {
         let mut item = card();
         item.deadline_at = None;
         item.status = "doing".into();
-        assert_eq!(nag_kind(&item, at(10, 0)), None);
+        assert_eq!(kind(&item, at(10, 0)), None);
         item.status = TODO_ID.into();
-        assert_eq!(nag_kind(&item, at(10, 0)), Some(NagKind::Start));
+        assert_eq!(kind(&item, at(10, 0)), Some(NagKind::Start));
         item.status = "doing".into();
         item.deadline_at = Some(at(18, 0));
-        assert_eq!(nag_kind(&item, at(18, 0)), Some(NagKind::Deadline));
+        assert_eq!(kind(&item, at(18, 0)), Some(NagKind::Deadline));
     }
 
     #[test]
     fn deadline_replaces_the_start_nag_and_snooze_pauses_both() {
         let mut item = card();
-        assert_eq!(nag_kind(&item, at(10, 0)), Some(NagKind::Start));
-        assert_eq!(nag_kind(&item, at(18, 0)), Some(NagKind::Deadline));
+        assert_eq!(kind(&item, at(10, 0)), Some(NagKind::Start));
+        assert_eq!(kind(&item, at(18, 0)), Some(NagKind::Deadline));
         mark_notified(&mut item, NagKind::Deadline, at(18, 0));
-        assert_eq!(nag_kind(&item, at(18, 5)), None);
+        assert_eq!(kind(&item, at(18, 5)), None);
         item.snooze_until = Some(at(20, 0));
         item.last_deadline_notified_at = None;
-        assert_eq!(nag_kind(&item, at(19, 0)), None);
-        assert_eq!(nag_kind(&item, at(20, 0)), Some(NagKind::Deadline));
+        assert_eq!(kind(&item, at(19, 0)), None);
+        assert_eq!(kind(&item, at(20, 0)), Some(NagKind::Deadline));
     }
 
     #[test]
     fn popup_stays_after_a_toast_and_leaves_on_snooze() {
         let mut item = card();
         mark_notified(&mut item, NagKind::Deadline, at(18, 0));
-        assert_eq!(nag_kind(&item, at(18, 5)), None);
-        assert!(needs_attention(&item, at(18, 5)));
+        assert_eq!(kind(&item, at(18, 5)), None);
+        assert!(attention(&item, at(18, 5)));
         item.snooze_until = Some(at(18, 20));
-        assert!(!needs_attention(&item, at(18, 5)));
+        assert!(!attention(&item, at(18, 5)));
     }
 
     #[test]
@@ -421,7 +460,104 @@ mod tests {
         let mut item = card();
         item.start_at = None;
         item.deadline_at = None;
-        assert_eq!(nag_kind(&item, at(23, 0)), None);
+        assert_eq!(kind(&item, at(23, 0)), None);
+    }
+
+    #[test]
+    fn start_nags_only_above_doing_and_deadline_nags_until_done() {
+        let columns = vec![
+            Column {
+                id: TODO_ID.into(),
+                title: "К выполнению".into(),
+            },
+            Column {
+                id: "above".into(),
+                title: "Проверка".into(),
+            },
+            Column {
+                id: DOING_ID.into(),
+                title: "В работе".into(),
+            },
+            Column {
+                id: "below".into(),
+                title: "Ждёт".into(),
+            },
+            Column {
+                id: DONE_ID.into(),
+                title: "Готово".into(),
+            },
+        ];
+        let mut item = card();
+        item.deadline_at = None;
+        item.status = "above".into();
+        assert_eq!(nag_kind(&columns, &item, at(10, 0)), Some(NagKind::Start));
+        item.status = DOING_ID.into();
+        assert_eq!(nag_kind(&columns, &item, at(10, 0)), None);
+        item.status = "below".into();
+        assert_eq!(nag_kind(&columns, &item, at(10, 0)), None);
+        item.deadline_at = Some(at(18, 0));
+        assert_eq!(
+            nag_kind(&columns, &item, at(18, 0)),
+            Some(NagKind::Deadline)
+        );
+        item.status = DOING_ID.into();
+        assert_eq!(
+            nag_kind(&columns, &item, at(18, 0)),
+            Some(NagKind::Deadline)
+        );
+        item.status = DONE_ID.into();
+        assert_eq!(nag_kind(&columns, &item, at(18, 0)), None);
+    }
+
+    #[test]
+    fn doing_stays_between_custom_statuses() {
+        let columns = normalize_columns(vec![
+            Column {
+                id: TODO_ID.into(),
+                title: "черновик".into(),
+            },
+            Column {
+                id: "a".into(),
+                title: "А".into(),
+            },
+            Column {
+                id: DOING_ID.into(),
+                title: "занято".into(),
+            },
+            Column {
+                id: "b".into(),
+                title: "Б".into(),
+            },
+            Column {
+                id: DONE_ID.into(),
+                title: "конец".into(),
+            },
+        ]);
+        let ids: Vec<_> = columns.iter().map(|column| column.id.as_str()).collect();
+        assert_eq!(ids, vec![TODO_ID, "a", DOING_ID, "b", DONE_ID]);
+        assert_eq!(columns[0].title, "К выполнению");
+        assert_eq!(columns[2].title, "В работе");
+        assert_eq!(columns[4].title, "Готово");
+    }
+
+    #[test]
+    fn a_missing_doing_column_returns_before_customs() {
+        let columns = normalize_columns(vec![
+            Column {
+                id: TODO_ID.into(),
+                title: "К выполнению".into(),
+            },
+            Column {
+                id: "a".into(),
+                title: "А".into(),
+            },
+            Column {
+                id: DONE_ID.into(),
+                title: "Готово".into(),
+            },
+        ]);
+        let ids: Vec<_> = columns.iter().map(|column| column.id.as_str()).collect();
+        assert_eq!(ids, vec![TODO_ID, DOING_ID, "a", DONE_ID]);
     }
 
     #[test]

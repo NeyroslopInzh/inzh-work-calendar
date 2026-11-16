@@ -21,6 +21,10 @@ export function addColumn(title: string): Promise<Column[]> {
   return invoke("add_column", { title });
 }
 
+export function moveColumn(id: string, direction: "up" | "down"): Promise<Column[]> {
+  return invoke("move_column", { id, direction });
+}
+
 export function removeColumn(id: string): Promise<{ columns: Column[]; cards: Card[] }> {
   return invoke("remove_column", { id });
 }

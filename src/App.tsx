@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState, type FormEvent } from "react";
+import { useEffect, useMemo, useRef, useState, type FormEvent } from "react";
 import { listen } from "@tauri-apps/api/event";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { openUrl } from "@tauri-apps/plugin-opener";
@@ -9,6 +9,7 @@ import {
   hideNag,
   listCards,
   listColumns,
+  moveColumn,
   prepareTelegramInvite,
   removeColumn,
   removeTelegramRecipient,
@@ -41,6 +42,7 @@ import {
   toLocalInput,
 } from "./time";
 import {
+  DOING,
   DONE,
   TODO,
   WEEKDAYS,
@@ -290,8 +292,8 @@ function MainApp() {
   }, [cards, focusId]);
 
   const nagging = useMemo(
-    () => cards.filter((card) => isNagging(card, now)),
-    [cards, now],
+    () => cards.filter((card) => isNagging(card, columns, now)),
+    [cards, columns, now],
   );
   const days = monthGrid(month);
   const selectedKey = dayKey(selected);
@@ -423,16 +425,16 @@ function MainApp() {
           <b>inzh's</b>
           <span>work calendar</span>
         </div>
-        <div className="switch" data-view={view}>
+        <div className="switch view" data-view={view}>
           <span className="thumb" />
-          <button type="button" aria-pressed={view === "calendar"} onClick={() => setView("calendar")}>
-            Календарь
+          <button type="button" aria-label="Календарь" aria-pressed={view === "calendar"} onClick={() => setView("calendar")}>
+            <CalendarIcon />
           </button>
-          <button type="button" aria-pressed={view === "board"} onClick={() => setView("board")}>
-            Доска
+          <button type="button" aria-label="Доска" aria-pressed={view === "board"} onClick={() => setView("board")}>
+            <BoardIcon />
           </button>
-          <button type="button" aria-pressed={view === "settings"} onClick={() => setView("settings")}>
-            Настройки
+          <button type="button" aria-label="Настройки" aria-pressed={view === "settings"} onClick={() => setView("settings")}>
+            <GearIcon />
           </button>
         </div>
         <div className="top-actions">
@@ -560,7 +562,7 @@ function MainApp() {
                       <strong>{card.title}</strong>
                       {card.description.trim() && <p className="preview">{preview(card.description)}</p>}
                       <span className="status">{columnTitle(card.status)}</span>
-                      <span className="meta">{whenLine(card, now)}</span>
+                      <span className="meta">{whenLine(card, columns, now)}</span>
                       <div className="actions">
                         <button type="button" className="tiny" onClick={() => setDraft(draftFromCard(card))}>
                           Изменить
@@ -619,7 +621,7 @@ function MainApp() {
                       >
                         <strong>{card.title}</strong>
                         {card.description.trim() && <p className="preview">{preview(card.description)}</p>}
-                        <span className="meta">{whenLine(card, now)}</span>
+                        <span className="meta">{whenLine(card, columns, now)}</span>
                         <div className="actions">
                           <button type="button" className="tiny" onClick={() => setDraft(draftFromCard(card))}>
                             Изменить
@@ -712,12 +714,20 @@ function MainApp() {
                 })
                 .catch((removeError) => setError(explain(removeError)));
             }}
+            onMove={(id, direction) => {
+              void moveColumn(id, direction)
+                .then((next) => {
+                  setColumns(next);
+                  setError("");
+                })
+                .catch((moveError) => setError(explain(moveError)));
+            }}
           />
         )}
       </main>
 
       <p className="foot">
-        Начало напоминает только в «К выполнению». Дедлайн — в любом статусе, кроме «Готово», каждые 10 минут. Отложить дедлайн можно не больше чем на сутки.
+        Начало напоминает, пока задача выше «В работе». Дедлайн — в любом статусе, кроме «Готово», каждые 10 минут. Отложить дедлайн можно не больше чем на сутки.
         Закрытие прячет окно в трей. Задачу можно продиктовать в чат — она попадёт сюда, если приложение запущено.
       </p>
 
@@ -731,6 +741,7 @@ function MainApp() {
         <TaskView
           card={cards.find((card) => card.id === viewId) as Card}
           statusTitle={columnTitle(cards.find((card) => card.id === viewId)?.status ?? "")}
+          columns={columns}
           recipients={recipients}
           onClose={() => setViewId(null)}
           onEdit={() => {
@@ -871,7 +882,7 @@ function MainApp() {
               </select>
             </label>
             <p className="hint">
-              Начало напоминает каждые 10 минут, только пока задача в «К выполнению». Дедлайн напоминает в остальных статусах тоже, пока она не в «Готово». Delete в дате стирает текущие цифры и переходит к следующим.
+              Начало напоминает каждые 10 минут, пока задача выше «В работе». Дедлайн напоминает в любом статусе, кроме «Готово». Delete в дате стирает текущие цифры и переходит к следующим.
             </p>
             {draft.id && isDeadlineDue(inputAsCard(draft), now) && (
               <div className="field">
@@ -964,6 +975,7 @@ function SettingsView({
   onAutostart,
   onAdd,
   onRemove,
+  onMove,
   telegramToken,
   telegramBot,
   telegramInvite,
@@ -984,6 +996,7 @@ function SettingsView({
   onAutostart: (enabled: boolean) => void;
   onAdd: () => void;
   onRemove: (id: string) => void;
+  onMove: (id: string, direction: "up" | "down") => void;
   telegramToken: string;
   telegramBot: string;
   telegramInvite: string;
@@ -1151,21 +1164,36 @@ function SettingsView({
       <article className="setting column-setting">
         <div>
           <strong>Статусы доски</strong>
-          <p>«К выполнению» и «Готово» остаются всегда. Остальные можно убрать или добавить.</p>
+          <p>
+            «К выполнению», «В работе» и «Готово» остаются на местах. Свои статусы можно поднять или опустить: выше «В работе» задача напоминает о начале, ниже — только о дедлайне.
+          </p>
         </div>
         <div className="list">
-          {columns.map((column) => (
-            <div key={column.id} className="status-row">
-              <strong>{column.title}</strong>
-              {column.id !== TODO && column.id !== DONE ? (
-                <button type="button" className="tiny late" onClick={() => onRemove(column.id)}>
-                  Убрать
-                </button>
-              ) : (
-                <span className="meta">всегда</span>
-              )}
-            </div>
-          ))}
+          {columns.map((column, index) => {
+            const fixed = column.id === TODO || column.id === DOING || column.id === DONE;
+            const canUp = !fixed && columns[index - 1]?.id !== TODO;
+            const canDown = !fixed && columns[index + 1]?.id !== DONE;
+            return (
+              <div key={column.id} className="status-row">
+                <strong>{column.title}</strong>
+                {fixed ? (
+                  <span className="meta">всегда</span>
+                ) : (
+                  <div className="status-actions">
+                    <button type="button" className="tiny" disabled={!canUp} onClick={() => onMove(column.id, "up")}>
+                      Выше
+                    </button>
+                    <button type="button" className="tiny" disabled={!canDown} onClick={() => onMove(column.id, "down")}>
+                      Ниже
+                    </button>
+                    <button type="button" className="tiny late" onClick={() => onRemove(column.id)}>
+                      Убрать
+                    </button>
+                  </div>
+                )}
+              </div>
+            );
+          })}
         </div>
         <form
           className="status-add"
@@ -1190,15 +1218,18 @@ function SettingsView({
 
 function NagPopup() {
   const [items, setItems] = useState<Card[]>([]);
+  const columnsRef = useRef<Column[]>(FALLBACK_COLUMNS);
 
   function apply(all: Card[]) {
-    const due = all.filter((card) => isNagging(card, new Date()));
+    const due = all.filter((card) => isNagging(card, columnsRef.current, new Date()));
     setItems(due);
     if (due.length === 0) void hideNag();
   }
 
   async function load() {
-    apply(await listCards());
+    const [cards, board] = await Promise.all([listCards(), listColumns()]);
+    if (board.length > 0) columnsRef.current = board;
+    apply(cards);
   }
 
   useEffect(() => {
@@ -1242,9 +1273,15 @@ function NagPopup() {
             {card.deadlineAt ? ` · ${formatDayTime(card.deadlineAt)}` : ""}
           </span>
           <div className="actions">
-            <button type="button" className="solid" onClick={() => void setStatus(card.id, "done").then(load)}>
-              Готово
-            </button>
+            {isDeadlineDue(card, new Date()) ? (
+              <button type="button" className="solid" onClick={() => void setStatus(card.id, "done").then(load)}>
+                Готово
+              </button>
+            ) : (
+              <button type="button" className="solid" onClick={() => void setStatus(card.id, DOING).then(load)}>
+                Взять в работу
+              </button>
+            )}
             {isDeadlineDue(card, new Date()) &&
               SNOOZE.map((option) => (
                 <button
@@ -1292,9 +1329,15 @@ function DueStrip({
                 : "ждёт"}
           </span>
           <div className="actions">
-            <button type="button" className="tiny" onClick={() => void run(() => setStatus(card.id, "done"))}>
-              Готово
-            </button>
+            {isDeadlineDue(card, now) ? (
+              <button type="button" className="tiny" onClick={() => void run(() => setStatus(card.id, "done"))}>
+                Готово
+              </button>
+            ) : (
+              <button type="button" className="tiny" onClick={() => void run(() => setStatus(card.id, DOING))}>
+                Взять в работу
+              </button>
+            )}
             {isDeadlineDue(card, now) &&
               SNOOZE.map((option) => (
                 <button
@@ -1316,12 +1359,14 @@ function DueStrip({
 function TaskView({
   card,
   statusTitle,
+  columns,
   recipients,
   onClose,
   onEdit,
 }: {
   card: Card;
   statusTitle: string;
+  columns: Column[];
   recipients: TelegramRecipient[];
   onClose: () => void;
   onEdit: () => void;
@@ -1336,7 +1381,7 @@ function TaskView({
         <h2>{card.title}</h2>
         <p className="meta">{statusTitle}</p>
         {card.description.trim() ? <p className="preview">{card.description}</p> : <p className="empty">Без описания</p>}
-        <p className="meta">{whenLine(card, new Date())}</p>
+        <p className="meta">{whenLine(card, columns, new Date())}</p>
         <p className="meta">{names.length ? `Телеграм: ${names.join(", ")}` : "Телеграм: никому"}</p>
         {card.recurrence && (
           <p className="meta">
@@ -1359,6 +1404,34 @@ function TaskView({
   );
 }
 
+function CalendarIcon() {
+  return (
+    <svg viewBox="0 0 24 24" aria-hidden="true">
+      <rect x="4" y="5" width="16" height="15" rx="2" />
+      <path d="M8 3.5v3M16 3.5v3M4 9.5h16" />
+    </svg>
+  );
+}
+
+function BoardIcon() {
+  return (
+    <svg viewBox="0 0 24 24" aria-hidden="true">
+      <rect x="3.5" y="4" width="5" height="16" rx="1.2" />
+      <rect x="9.5" y="4" width="5" height="10" rx="1.2" />
+      <rect x="15.5" y="4" width="5" height="13" rx="1.2" />
+    </svg>
+  );
+}
+
+function GearIcon() {
+  return (
+    <svg viewBox="0 0 24 24" aria-hidden="true">
+      <circle cx="12" cy="12" r="3" />
+      <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09a1.65 1.65 0 0 0-1-1.51 1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09a1.65 1.65 0 0 0 1.51-1 1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z" />
+    </svg>
+  );
+}
+
 function SunIcon() {
   return (
     <svg viewBox="0 0 24 24" aria-hidden="true">
@@ -1376,12 +1449,12 @@ function MoonIcon() {
   );
 }
 
-function whenLine(card: Card, now: Date): string {
+function whenLine(card: Card, columns: Column[], now: Date): string {
   const parts: string[] = [];
   if (card.startAt) parts.push(`начало ${formatDayTime(card.startAt)}`);
   if (card.deadlineAt) parts.push(`дедлайн ${formatDayTime(card.deadlineAt)}`);
   if (isSnoozed(card, now) && card.snoozeUntil) parts.push(`тишина до ${formatTime(card.snoozeUntil)}`);
-  if (isStartDue(card, now)) parts.push("пора начать");
+  if (isStartDue(card, columns, now)) parts.push("пора начать");
   if (parts.length === 0) return "без срока";
   return parts.join(" · ");
 }

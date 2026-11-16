@@ -93,7 +93,8 @@ button:focus-visible, input:focus-visible, select:focus-visible {
   border-radius: 999px;
   isolation: isolate;
 }
-.top > .switch { flex: 1 1 240px; min-width: 0; }
+.top > .switch { flex: 0 0 auto; }
+.switch.view { grid-template-columns: repeat(3, 36px); }
 .switch.theme { flex: 0 0 auto; }
 .switch.theme { grid-template-columns: repeat(2, 36px); }
 .switch .thumb {
@@ -134,7 +135,8 @@ button:focus-visible, input:focus-visible, select:focus-visible {
   font-weight: 700;
   background: transparent;
 }
-.switch.theme button {
+.switch.theme button,
+.switch.view button {
   min-width: 0;
   width: 36px;
   height: 36px;
@@ -142,7 +144,16 @@ button:focus-visible, input:focus-visible, select:focus-visible {
   place-items: center;
   padding: 0;
 }
-.switch.theme svg { width: 18px; height: 18px; fill: none; stroke: currentColor; stroke-width: 1.8; }
+.switch.theme svg,
+.switch.view svg {
+  width: 18px;
+  height: 18px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.8;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
 
 .grow { flex: 1; }
 
@@ -540,6 +551,8 @@ button:focus-visible, input:focus-visible, select:focus-visible {
   border-radius: 12px;
   padding: 10px 12px;
 }
+.status-actions { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 6px; }
+.status-actions button:disabled { opacity: 0.35; cursor: default; }
 .status-add { display: flex; gap: 8px; }
 .status-add input { flex: 1; background: var(--bg); border: 1px solid var(--line); border-radius: 10px; padding: 10px 12px; color: var(--text); }
 .setting label.stack { display: flex; flex-direction: column; gap: 6px; color: var(--muted); font-size: 13px; }
@@ -575,7 +588,6 @@ button:focus-visible, input:focus-visible, select:focus-visible {
   .work { padding: 12px; }
 }
 @media (max-width: 640px) {
-  .switch { flex-basis: 100%; order: 3; }
   .top-actions { margin-left: 0; }
   .agenda { min-height: 180px; }
 }
