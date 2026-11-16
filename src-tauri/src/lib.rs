@@ -135,12 +135,13 @@ fn set_telegram_token(
 }
 
 #[tauri::command]
-fn set_telegram_always(
+fn set_recipient_always(
     app: tauri::AppHandle,
     store: tauri::State<Store>,
+    id: String,
     enabled: bool,
 ) -> Result<Settings, String> {
-    let settings = store.set_telegram_always(enabled)?;
+    let settings = store.set_recipient_always(&id, enabled)?;
     let _ = app.emit("telegram-changed", &settings);
     Ok(settings)
 }
@@ -271,7 +272,7 @@ pub fn run() {
             set_autostart,
             set_theme,
             set_telegram_token,
-            set_telegram_always,
+            set_recipient_always,
             remove_telegram_recipient,
             prepare_telegram_invite,
             update_kind

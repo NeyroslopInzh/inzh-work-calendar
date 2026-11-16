@@ -53,8 +53,8 @@ export function setTelegramToken(token: string): Promise<Settings> {
   return invoke("set_telegram_token", { token });
 }
 
-export function setTelegramAlways(enabled: boolean): Promise<Settings> {
-  return invoke("set_telegram_always", { enabled });
+export function setRecipientAlways(id: string, enabled: boolean): Promise<Settings> {
+  return invoke("set_recipient_always", { id, enabled });
 }
 
 export function removeTelegramRecipient(id: string): Promise<Settings> {

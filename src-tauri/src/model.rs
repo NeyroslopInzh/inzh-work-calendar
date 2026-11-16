@@ -166,6 +166,8 @@ pub struct TelegramRecipient {
     pub chat_id: i64,
     pub name: String,
     pub username: String,
+    #[serde(default)]
+    pub always_send: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -190,8 +192,6 @@ pub struct Settings {
     #[serde(default)]
     pub telegram_invite: String,
     #[serde(default)]
-    pub telegram_always: bool,
-    #[serde(default)]
     pub telegram_offset: i64,
     #[serde(default)]
     pub recipients: Vec<TelegramRecipient>,
@@ -206,7 +206,6 @@ impl Default for Settings {
             telegram_token: String::new(),
             telegram_bot: String::new(),
             telegram_invite: String::new(),
-            telegram_always: false,
             telegram_offset: 0,
             recipients: Vec::new(),
         }
@@ -214,15 +213,12 @@ impl Default for Settings {
 }
 
 pub fn default_recipient_ids(settings: &Settings) -> Vec<String> {
-    if settings.telegram_always {
-        settings
-            .recipients
-            .iter()
-            .map(|recipient| recipient.id.clone())
-            .collect()
-    } else {
-        Vec::new()
-    }
+    settings
+        .recipients
+        .iter()
+        .filter(|recipient| recipient.always_send)
+        .map(|recipient| recipient.id.clone())
+        .collect()
 }
 
 /// `specified` is what the editor sent. `existing` is the saved card; None means the card is new.
@@ -266,6 +262,7 @@ pub fn merge_recipients(
                 chat_id: contact.chat_id,
                 name: contact.name.clone(),
                 username: contact.username.clone(),
+                always_send: false,
             });
             changed = true;
         }
@@ -439,9 +436,30 @@ mod tests {
     #[test]
     fn settings_without_telegram_stay_empty() {
         let settings: Settings = serde_json::from_str(r#"{"autostart":false}"#).unwrap();
-        assert!(!settings.telegram_always);
         assert!(settings.telegram_token.is_empty());
         assert!(settings.recipients.is_empty());
+    }
+
+    #[test]
+    fn new_task_takes_only_people_marked_always() {
+        let mut settings = Settings::default();
+        settings.recipients = vec![
+            TelegramRecipient {
+                id: "a".into(),
+                chat_id: 1,
+                name: "Аня".into(),
+                username: String::new(),
+                always_send: true,
+            },
+            TelegramRecipient {
+                id: "b".into(),
+                chat_id: 2,
+                name: "Боря".into(),
+                username: String::new(),
+                always_send: false,
+            },
+        ];
+        assert_eq!(default_recipient_ids(&settings), vec!["a".to_string()]);
     }
 
     #[test]
@@ -472,6 +490,7 @@ mod tests {
             chat_id: 42,
             name: "Анна".into(),
             username: String::new(),
+            always_send: true,
         }];
         assert!(merge_recipients(
             &mut recipients,
@@ -484,6 +503,7 @@ mod tests {
         assert_eq!(recipients.len(), 1);
         assert_eq!(recipients[0].id, "keep");
         assert_eq!(recipients[0].username, "anna");
+        assert!(recipients[0].always_send);
         assert!(!merge_recipients(
             &mut recipients,
             &[TelegramContact {
@@ -500,6 +520,7 @@ mod tests {
                 chat_id,
                 name: "человек".into(),
                 username: String::new(),
+                always_send: false,
             });
         }
         assert!(!merge_recipients(

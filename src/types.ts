@@ -14,6 +14,7 @@ export type TelegramRecipient = {
   chatId: number;
   name: string;
   username: string;
+  alwaysSend: boolean;
 };
 
 export type Card = {
@@ -49,7 +50,6 @@ export type Settings = {
   telegramToken: string;
   telegramBot: string;
   telegramInvite: string;
-  telegramAlways: boolean;
   recipients: TelegramRecipient[];
 };
 

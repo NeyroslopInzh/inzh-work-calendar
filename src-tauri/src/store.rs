@@ -137,9 +137,16 @@ impl Store {
         Ok(settings.clone())
     }
 
-    pub fn set_telegram_always(&self, enabled: bool) -> Result<Settings, String> {
+    pub fn set_recipient_always(&self, id: &str, enabled: bool) -> Result<Settings, String> {
         let mut settings = lock(&self.settings);
-        settings.telegram_always = enabled;
+        let Some(recipient) = settings
+            .recipients
+            .iter_mut()
+            .find(|recipient| recipient.id == id)
+        else {
+            return Err("Получатель не найден".into());
+        };
+        recipient.always_send = enabled;
         write_json(&self.settings_path, &*settings)?;
         Ok(settings.clone())
     }

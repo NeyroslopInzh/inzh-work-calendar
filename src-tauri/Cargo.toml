@@ -1,6 +1,6 @@
 [package]
 name = "inzh-work-calendar"
-version = "0.2.3"
+version = "0.2.4"
 description = "inzh work calendar"
 license = "GPL-3.0-or-later"
 edition = "2024"

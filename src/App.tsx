@@ -14,8 +14,8 @@ import {
   removeTelegramRecipient,
   saveCard,
   setAutostart,
+  setRecipientAlways,
   setStatus,
-  setTelegramAlways,
   setTelegramToken as saveTelegramToken,
   setTheme,
   snoozeCard,
@@ -176,7 +176,6 @@ function MainApp() {
   const [telegramToken, setTelegramToken] = useState("");
   const [telegramBot, setTelegramBot] = useState("");
   const [telegramInvite, setTelegramInvite] = useState("");
-  const [telegramAlways, setTelegramAlwaysOn] = useState(false);
   const [recipients, setRecipients] = useState<TelegramRecipient[]>([]);
   const [customSnooze, setCustomSnooze] = useState("30");
   const [offer, setOffer] = useState<UpdateOffer | null>(null);
@@ -188,12 +187,11 @@ function MainApp() {
     setTelegramToken(settings.telegramToken);
     setTelegramBot(settings.telegramBot);
     setTelegramInvite(settings.telegramInvite);
-    setTelegramAlwaysOn(settings.telegramAlways);
     setRecipients(settings.recipients);
   }
 
   function freshDraft(): Draft {
-    return blankDraft(telegramAlways ? recipients.map((item) => item.id) : []);
+    return blankDraft(recipients.filter((item) => item.alwaysSend).map((item) => item.id));
   }
 
   useEffect(() => {
@@ -653,19 +651,22 @@ function MainApp() {
             telegramToken={telegramToken}
             telegramBot={telegramBot}
             telegramInvite={telegramInvite}
-            telegramAlways={telegramAlways}
             recipients={recipients}
             onFail={(telegramError) => setError(explain(telegramError))}
             onTelegramToken={async (token) => {
               rememberSettings(await saveTelegramToken(token));
               setError("");
             }}
-            onTelegramAlways={(enabled) => {
-              setTelegramAlwaysOn(enabled);
-              void setTelegramAlways(enabled)
+            onRecipientAlways={(id, enabled) => {
+              setRecipients((current) =>
+                current.map((item) => (item.id === id ? { ...item, alwaysSend: enabled } : item)),
+              );
+              void setRecipientAlways(id, enabled)
                 .then((settings) => rememberSettings(settings))
                 .catch((alwaysError) => {
-                  setTelegramAlwaysOn(!enabled);
+                  setRecipients((current) =>
+                    current.map((item) => (item.id === id ? { ...item, alwaysSend: !enabled } : item)),
+                  );
                   setError(explain(alwaysError));
                 });
             }}
@@ -966,11 +967,10 @@ function SettingsView({
   telegramToken,
   telegramBot,
   telegramInvite,
-  telegramAlways,
   recipients,
   onFail,
   onTelegramToken,
-  onTelegramAlways,
+  onRecipientAlways,
   onInvite,
   onRemoveRecipient,
 }: {
@@ -987,11 +987,10 @@ function SettingsView({
   telegramToken: string;
   telegramBot: string;
   telegramInvite: string;
-  telegramAlways: boolean;
   recipients: TelegramRecipient[];
   onFail: (error: unknown) => void;
   onTelegramToken: (token: string) => Promise<void>;
-  onTelegramAlways: (enabled: boolean) => void;
+  onRecipientAlways: (id: string, enabled: boolean) => void;
   onInvite: () => Promise<void>;
   onRemoveRecipient: (id: string) => void;
 }) {
@@ -1077,22 +1076,46 @@ function SettingsView({
           />
         </label>
         <p className="hint">{telegramBot ? `Бот @${telegramBot}` : "Имя бота появится после сохранения токена."}</p>
-        <div className="list">
-          {recipients.length === 0 && <p className="empty">Пока никого нет.</p>}
-          {recipients.map((recipient) => (
-            <div key={recipient.id} className="status-row">
-              <strong>{recipientTitle(recipient)}</strong>
-              <button type="button" className="tiny late" onClick={() => onRemoveRecipient(recipient.id)}>
-                Убрать
-              </button>
-            </div>
-          ))}
+        <div className="table-wrap">
+          <table className="people">
+            <thead>
+              <tr>
+                <th>Получатель</th>
+                <th>Всегда отправлять</th>
+                <th></th>
+              </tr>
+            </thead>
+            <tbody>
+              {recipients.length === 0 ? (
+                <tr>
+                  <td colSpan={3} className="empty">
+                    Пока никого нет.
+                  </td>
+                </tr>
+              ) : (
+                recipients.map((recipient) => (
+                  <tr key={recipient.id}>
+                    <td>{recipientTitle(recipient)}</td>
+                    <td>
+                      <input
+                        type="checkbox"
+                        aria-label={`Всегда отправлять: ${recipientTitle(recipient)}`}
+                        checked={recipient.alwaysSend}
+                        onChange={(event) => onRecipientAlways(recipient.id, event.target.checked)}
+                      />
+                    </td>
+                    <td>
+                      <button type="button" className="tiny late" onClick={() => onRemoveRecipient(recipient.id)}>
+                        Убрать
+                      </button>
+                    </td>
+                  </tr>
+                ))
+              )}
+            </tbody>
+          </table>
         </div>
-        <label className="check">
-          <input type="checkbox" checked={telegramAlways} onChange={(event) => onTelegramAlways(event.target.checked)} />
-          Всегда отправлять
-        </label>
-        <p className="hint">Новая задача сразу получает всех из списка. В самой задаче получателей можно добавить или убрать.</p>
+        <p className="hint">Новая задача сразу получает тех, у кого стоит «Всегда отправлять». В задаче этот набор можно изменить.</p>
         <div className="actions">
           <button type="button" className="solid" disabled={inviteBusy} onClick={() => void addRecipient()}>
             {inviteBusy ? "Готовим ссылку…" : "Добавить получателя"}
