@@ -1853,7 +1853,7 @@ dependencies = [
 
 [[package]]
 name = "inzh-work-calendar"
-version = "0.2.6"
+version = "0.2.7"
 dependencies = [
  "chrono",
  "serde",

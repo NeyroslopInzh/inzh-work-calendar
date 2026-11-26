@@ -214,6 +214,43 @@ impl Store {
         Ok((settings, Some(cards)))
     }
 
+    pub fn set_task_bot(&self, token: String, bot: String) -> Result<Settings, String> {
+        let mut settings = lock(&self.settings);
+        if settings.task_bot_token != token {
+            settings.task_bot_offset = 0;
+            settings.task_bot_ready = false;
+        }
+        settings.task_bot_token = token;
+        settings.task_bot = bot;
+        write_json(&self.settings_path, &*settings)?;
+        Ok(settings.clone())
+    }
+
+    /// The first successful poll drops the queue, then later polls confirm new updates.
+    pub fn catch_up_task_bot(&self, token: &str, offset: i64) -> Result<(), String> {
+        let mut settings = lock(&self.settings);
+        if settings.task_bot_token != token || settings.task_bot_ready {
+            return Ok(());
+        }
+        settings.task_bot_offset = offset.max(0);
+        settings.task_bot_ready = true;
+        write_json(&self.settings_path, &*settings)?;
+        Ok(())
+    }
+
+    pub fn advance_task_bot(&self, token: &str, offset: i64) -> Result<(), String> {
+        let mut settings = lock(&self.settings);
+        if settings.task_bot_token != token
+            || !settings.task_bot_ready
+            || offset <= settings.task_bot_offset
+        {
+            return Ok(());
+        }
+        settings.task_bot_offset = offset;
+        write_json(&self.settings_path, &*settings)?;
+        Ok(())
+    }
+
     pub fn set_telegram_invite(&self, bot: &str, url: &str) -> Result<Settings, String> {
         let mut settings = lock(&self.settings);
         settings.telegram_bot = bot.to_string();

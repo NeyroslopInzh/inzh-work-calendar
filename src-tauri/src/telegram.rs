@@ -111,7 +111,7 @@ fn send_message(token: &str, chat_id: i64, text: &str) -> Result<(), String> {
     Ok(())
 }
 
-fn get(token: &str, method: &str, query: &str) -> Result<Value, String> {
+pub(crate) fn get(token: &str, method: &str, query: &str) -> Result<Value, String> {
     let url = if query.is_empty() {
         format!("https://api.telegram.org/bot{token}/{method}")
     } else {
@@ -121,7 +121,7 @@ fn get(token: &str, method: &str, query: &str) -> Result<Value, String> {
     read_body(response)
 }
 
-fn post(token: &str, method: &str, body: Value) -> Result<Value, String> {
+pub(crate) fn post(token: &str, method: &str, body: Value) -> Result<Value, String> {
     let url = format!("https://api.telegram.org/bot{token}/{method}");
     let response = agent().post(&url).send_json(body).map_err(http_error)?;
     read_body(response)

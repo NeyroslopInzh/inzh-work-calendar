@@ -2,6 +2,7 @@ mod agent;
 mod model;
 mod schedule;
 mod store;
+mod task_bot;
 mod telegram;
 
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -135,6 +136,9 @@ fn set_telegram_token(
     token: String,
 ) -> Result<Settings, String> {
     let token = token.trim().to_string();
+    if !token.is_empty() && token == store.settings().task_bot_token {
+        return Err("Это токен бота задач. Для напоминаний нужен другой бот.".into());
+    }
     let bot = if token.is_empty() {
         String::new()
     } else {
@@ -168,6 +172,30 @@ fn remove_telegram_recipient(
 ) -> Result<Settings, String> {
     let (settings, cards) = store.remove_recipient(&id)?;
     broadcast_cards(&app, cards);
+    let _ = app.emit("telegram-changed", &settings);
+    Ok(settings)
+}
+
+#[tauri::command]
+fn set_task_bot_token(
+    app: tauri::AppHandle,
+    store: tauri::State<Store>,
+    token: String,
+) -> Result<Settings, String> {
+    let token = token.trim().to_string();
+    if !token.is_empty() && token == store.settings().telegram_token {
+        return Err("Это токен бота напоминаний. Для задач нужен другой бот.".into());
+    }
+    let changed = store.settings().task_bot_token != token;
+    let bot = if token.is_empty() {
+        String::new()
+    } else {
+        telegram::bot_username(&token)?
+    };
+    let settings = store.set_task_bot(token, bot)?;
+    if changed {
+        task_bot::forget_sessions();
+    }
     let _ = app.emit("telegram-changed", &settings);
     Ok(settings)
 }
@@ -267,6 +295,7 @@ pub fn run() {
             std::thread::spawn(move || {
                 loop {
                     let _ = telegram::poll(&telegram_poll);
+                    let _ = task_bot::poll(&telegram_poll);
                     std::thread::sleep(Duration::from_secs(4));
                 }
             });
@@ -290,6 +319,7 @@ pub fn run() {
             set_recipient_always,
             remove_telegram_recipient,
             prepare_telegram_invite,
+            set_task_bot_token,
             update_kind
         ])
         .run(tauri::generate_context!())

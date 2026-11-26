@@ -226,6 +226,16 @@ pub struct Settings {
     pub telegram_offset: i64,
     #[serde(default)]
     pub recipients: Vec<TelegramRecipient>,
+    /// Second bot: people send tasks into the calendar from any chat.
+    #[serde(default)]
+    pub task_bot_token: String,
+    #[serde(default)]
+    pub task_bot: String,
+    #[serde(default)]
+    pub task_bot_offset: i64,
+    /// False until the first poll skips updates that arrived before the token was saved.
+    #[serde(default)]
+    pub task_bot_ready: bool,
 }
 
 impl Default for Settings {
@@ -239,6 +249,10 @@ impl Default for Settings {
             telegram_invite: String::new(),
             telegram_offset: 0,
             recipients: Vec::new(),
+            task_bot_token: String::new(),
+            task_bot: String::new(),
+            task_bot_offset: 0,
+            task_bot_ready: false,
         }
     }
 }
@@ -574,6 +588,8 @@ mod tests {
         let settings: Settings = serde_json::from_str(r#"{"autostart":false}"#).unwrap();
         assert!(settings.telegram_token.is_empty());
         assert!(settings.recipients.is_empty());
+        assert!(settings.task_bot_token.is_empty());
+        assert!(!settings.task_bot_ready);
     }
 
     #[test]

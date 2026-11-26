@@ -557,6 +557,16 @@ button:focus-visible, input:focus-visible, select:focus-visible {
 .status-add input { flex: 1; background: var(--bg); border: 1px solid var(--line); border-radius: 10px; padding: 10px 12px; color: var(--text); }
 .setting label.stack { display: flex; flex-direction: column; gap: 6px; color: var(--muted); font-size: 13px; }
 .line-input { width: 100%; background: var(--bg); border: 1px solid var(--line); border-radius: 10px; padding: 10px 12px; color: var(--text); }
+.sample {
+  margin: 0;
+  padding: 10px 12px;
+  border-radius: 10px;
+  background: var(--bg);
+  border: 1px solid var(--line);
+  color: var(--text);
+  font: 13px/1.45 inherit;
+  white-space: pre-wrap;
+}
 .invite-row { display: flex; gap: 8px; align-items: center; }
 .invite-row .line-input { min-width: 0; }
 .recipients { display: flex; flex-direction: column; gap: 6px; }

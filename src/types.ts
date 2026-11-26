@@ -51,6 +51,8 @@ export type Settings = {
   telegramBot: string;
   telegramInvite: string;
   recipients: TelegramRecipient[];
+  taskBotToken: string;
+  taskBot: string;
 };
 
 export type Placement = "start" | "deadline" | "both";

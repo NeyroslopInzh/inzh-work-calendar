@@ -57,6 +57,10 @@ export function setTelegramToken(token: string): Promise<Settings> {
   return invoke("set_telegram_token", { token });
 }
 
+export function setTaskBotToken(token: string): Promise<Settings> {
+  return invoke("set_task_bot_token", { token });
+}
+
 export function setRecipientAlways(id: string, enabled: boolean): Promise<Settings> {
   return invoke("set_recipient_always", { id, enabled });
 }

@@ -17,6 +17,7 @@ import {
   setAutostart,
   setRecipientAlways,
   setStatus,
+  setTaskBotToken as saveTaskBotToken,
   setTelegramToken as saveTelegramToken,
   setTheme,
   snoozeCard,
@@ -178,6 +179,8 @@ function MainApp() {
   const [telegramToken, setTelegramToken] = useState("");
   const [telegramBot, setTelegramBot] = useState("");
   const [telegramInvite, setTelegramInvite] = useState("");
+  const [taskBotToken, setTaskBotToken] = useState("");
+  const [taskBot, setTaskBot] = useState("");
   const [recipients, setRecipients] = useState<TelegramRecipient[]>([]);
   const [customSnooze, setCustomSnooze] = useState("30");
   const [offer, setOffer] = useState<UpdateOffer | null>(null);
@@ -190,6 +193,8 @@ function MainApp() {
     setTelegramBot(settings.telegramBot);
     setTelegramInvite(settings.telegramInvite);
     setRecipients(settings.recipients);
+    setTaskBotToken(settings.taskBotToken);
+    setTaskBot(settings.taskBot);
   }
 
   function freshDraft(): Draft {
@@ -653,10 +658,16 @@ function MainApp() {
             telegramToken={telegramToken}
             telegramBot={telegramBot}
             telegramInvite={telegramInvite}
+            taskBotToken={taskBotToken}
+            taskBot={taskBot}
             recipients={recipients}
             onFail={(telegramError) => setError(explain(telegramError))}
             onTelegramToken={async (token) => {
               rememberSettings(await saveTelegramToken(token));
+              setError("");
+            }}
+            onTaskBotToken={async (token) => {
+              rememberSettings(await saveTaskBotToken(token));
               setError("");
             }}
             onRecipientAlways={(id, enabled) => {
@@ -979,9 +990,12 @@ function SettingsView({
   telegramToken,
   telegramBot,
   telegramInvite,
+  taskBotToken,
+  taskBot,
   recipients,
   onFail,
   onTelegramToken,
+  onTaskBotToken,
   onRecipientAlways,
   onInvite,
   onRemoveRecipient,
@@ -1000,20 +1014,28 @@ function SettingsView({
   telegramToken: string;
   telegramBot: string;
   telegramInvite: string;
+  taskBotToken: string;
+  taskBot: string;
   recipients: TelegramRecipient[];
   onFail: (error: unknown) => void;
   onTelegramToken: (token: string) => Promise<void>;
+  onTaskBotToken: (token: string) => Promise<void>;
   onRecipientAlways: (id: string, enabled: boolean) => void;
   onInvite: () => Promise<void>;
   onRemoveRecipient: (id: string) => void;
 }) {
   const [tokenDraft, setTokenDraft] = useState(telegramToken);
   const [tokenFocused, setTokenFocused] = useState(false);
+  const [taskDraft, setTaskDraft] = useState(taskBotToken);
+  const [taskFocused, setTaskFocused] = useState(false);
   const [inviteBusy, setInviteBusy] = useState(false);
   const [copied, setCopied] = useState(false);
   useEffect(() => {
     if (!tokenFocused) setTokenDraft(telegramToken);
   }, [telegramToken, tokenFocused]);
+  useEffect(() => {
+    if (!taskFocused) setTaskDraft(taskBotToken);
+  }, [taskBotToken, taskFocused]);
 
   async function addRecipient() {
     setInviteBusy(true);
@@ -1160,6 +1182,41 @@ function SettingsView({
         {telegramInvite && (
           <p className="hint">Ссылку открывает сам получатель и нажимает Start. Он появится в списке, когда приложение увидит сообщение.</p>
         )}
+      </article>
+      <article className="setting column-setting">
+        <div>
+          <strong>Бот задач</strong>
+          <p>
+            Отдельный бот, не бот напоминаний. Задачу можно прислать из любого чата. Токен выдаёт @BotFather.
+            В группе обычные сообщения бот видит, если в @BotFather выключена приватность.
+          </p>
+        </div>
+        <label className="stack">
+          Токен бота задач
+          <input
+            className="line-input"
+            value={taskDraft}
+            spellCheck={false}
+            autoComplete="off"
+            onFocus={() => setTaskFocused(true)}
+            onBlur={() => {
+              setTaskFocused(false);
+              const next = taskDraft.trim();
+              if (next !== taskBotToken) void onTaskBotToken(next).catch(onFail);
+            }}
+            onChange={(event) => setTaskDraft(event.target.value)}
+          />
+        </label>
+        <p className="hint">{taskBot ? `Бот @${taskBot}` : "Имя бота появится после сохранения токена."}</p>
+        <p className="hint">
+          Четыре строки: название, начало, дедлайн и комментарий. Комментарий можно не писать. Время в дате
+          необязательно, чч:мм или чч-мм. Без времени у начала берётся время сообщения, у дедлайна ставится 23:00.
+          Кнопка «Новая задача» спрашивает поля по очереди.
+        </p>
+        <pre className="sample">{`Наименование
+дд.мм.гггг чч:мм
+дд.мм.гггг
+Комментарий`}</pre>
       </article>
       <article className="setting column-setting">
         <div>
